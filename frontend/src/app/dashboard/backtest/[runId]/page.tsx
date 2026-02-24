@@ -114,6 +114,20 @@ export default function BacktestResultPage() {
                 sharpeRatio: statsData.sharpe_ratio,
                 brokeragePaid: estBrokerage
             });
+
+            // Map the engine's explicit EquityCurve payload
+            if (statsData.equity_curve && Array.isArray(statsData.equity_curve)) {
+                const engineCurve = statsData.equity_curve.map((pt: { time: string, equity: number }) => ({
+                    time: new Date(pt.time).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                    equity: pt.equity
+                }));
+                // Ensure at least 2 points to avoid rendering stalls
+                if (engineCurve.length > 0) {
+                    if (engineCurve.length === 1) engineCurve.push({ time: 'End', equity: engineCurve[0].equity });
+                    setEquityCurve(engineCurve);
+                    return;
+                }
+            }
         } else {
             // Fallback purely on frontend calculation if stats missing
             const netProfit = currentEquity - initialCash;
@@ -134,6 +148,8 @@ export default function BacktestResultPage() {
             });
         }
 
+        // Final fallback to make sure 1-point charts don't break Recharts rendering
+        if (curve.length === 1) curve.push({ time: 'End', equity: currentEquity });
         setEquityCurve(curve);
     };
 
@@ -170,9 +186,9 @@ export default function BacktestResultPage() {
             {stats && (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                     <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Net Profit</CardTitle>
-                            <IndianRupee className="h-4 w-4 text-muted-foreground" />
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
+                            <CardTitle className="text-sm font-medium truncate">Net Profit</CardTitle>
+                            <IndianRupee className="h-4 w-4 text-muted-foreground shrink-0" />
                         </CardHeader>
                         <CardContent>
                             <div className={`text-2xl font-bold ${stats.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
@@ -184,9 +200,9 @@ export default function BacktestResultPage() {
                         </CardContent>
                     </Card>
                     <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Current Capital</CardTitle>
-                            <IndianRupee className="h-4 w-4 text-muted-foreground" />
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
+                            <CardTitle className="text-sm font-medium truncate">Current Capital</CardTitle>
+                            <IndianRupee className="h-4 w-4 text-muted-foreground shrink-0" />
                         </CardHeader>
                         <CardContent>
                             <div className="text-2xl font-bold">₹{(100000 + stats.netProfit).toFixed(2)}</div>
@@ -196,9 +212,9 @@ export default function BacktestResultPage() {
                         </CardContent>
                     </Card>
                     <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Max Drawdown</CardTitle>
-                            <Activity className="h-4 w-4 text-muted-foreground" />
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
+                            <CardTitle className="text-sm font-medium truncate">Max Drawdown</CardTitle>
+                            <Activity className="h-4 w-4 text-muted-foreground shrink-0" />
                         </CardHeader>
                         <CardContent>
                             <div className="text-2xl font-bold text-red-500">
@@ -207,18 +223,18 @@ export default function BacktestResultPage() {
                         </CardContent>
                     </Card>
                     <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Sharpe Ratio</CardTitle>
-                            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
+                            <CardTitle className="text-sm font-medium truncate">Sharpe Ratio</CardTitle>
+                            <TrendingUp className="h-4 w-4 text-muted-foreground shrink-0" />
                         </CardHeader>
                         <CardContent>
                             <div className="text-2xl font-bold">{stats.sharpeRatio.toFixed(2)}</div>
                         </CardContent>
                     </Card>
                     <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Estimated Brokerage</CardTitle>
-                            <IndianRupee className="h-4 w-4 text-muted-foreground" />
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
+                            <CardTitle className="text-sm font-medium truncate">Estimated Brokerage</CardTitle>
+                            <IndianRupee className="h-4 w-4 text-muted-foreground shrink-0" />
                         </CardHeader>
                         <CardContent>
                             <div className="text-2xl font-bold text-yellow-500">

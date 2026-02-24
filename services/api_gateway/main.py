@@ -1,6 +1,6 @@
 import os
 import psycopg2
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from typing import List, Optional
@@ -24,27 +24,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- DATABASE CONNECTION HELPERS ---
+# --- DATABASE CONNECTION HELPERS (CONNECTION POOLING) ---
+from psycopg2 import pool
+
+# Global Connection Pools
+pg_pool = None
+qdb_pool = None
+
+@app.on_event("startup")
+def startup_db_pools():
+    global pg_pool, qdb_pool
+    try:
+        pg_pool = psycopg2.pool.ThreadedConnectionPool(
+            1, 20, # Min 1, Max 20 connections
+            host=os.getenv("POSTGRES_HOST", "postgres_metadata"),
+            port=5432,
+            user="admin",
+            password="password123",
+            database="quant_platform"
+        )
+        qdb_pool = psycopg2.pool.ThreadedConnectionPool(
+            1, 20,
+            host=os.getenv("QUESTDB_HOST", "questdb_tsdb"),
+            port=8812,
+            user="admin",
+            password="quest",
+            database="qdb"
+        )
+        print("✅ Database Connection Pools Initialized")
+    except Exception as e:
+        print(f"❌ Failed to initialize connection pools: {e}")
+
+@app.on_event("shutdown")
+def shutdown_db_pools():
+    if pg_pool: pg_pool.closeall()
+    if qdb_pool: qdb_pool.closeall()
 
 def get_pg_conn():
-    """Connect to PostgreSQL (Relational Metadata & Trades)"""
-    return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "postgres_metadata"),
-        port=5432,
-        user="admin",
-        password="password123",
-        database="quant_platform"
-    )
+    """Dependency Generator: Acquire from PG Pool"""
+    try:
+        conn = pg_pool.getconn()
+        yield conn
+    finally:
+        pg_pool.putconn(conn)
 
 def get_qdb_conn():
-    """Connect to QuestDB (Time-Series Market Data)"""
-    return psycopg2.connect(
-        host=os.getenv("QUESTDB_HOST", "questdb_tsdb"),
-        port=8812,
-        user="admin",
-        password="quest",
-        database="qdb"
-    )
+    """Dependency Generator: Acquire from QuestDB Pool"""
+    try:
+        conn = qdb_pool.getconn()
+        yield conn
+    finally:
+        qdb_pool.putconn(conn)
 
 # --- ENDPOINTS ---
 
@@ -106,11 +136,9 @@ def update_env_config(request: EnvUpdateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/market/quote/{symbol}")
-def get_quote(symbol: str):
+def get_quote(symbol: str, conn = Depends(get_qdb_conn)):
     """Fetch latest price and volume from QuestDB"""
-    conn = None
     try:
-        conn = get_qdb_conn()
         cur = conn.cursor()
         # Optimized for QuestDB's designated timestamp
         query = "SELECT timestamp, symbol, ltp, volume, oi FROM ticks WHERE symbol = %s ORDER BY timestamp DESC LIMIT 1;"
@@ -121,15 +149,11 @@ def get_quote(symbol: str):
         raise HTTPException(status_code=404, detail="Quote not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
 @app.get("/api/v1/market/greeks/{symbol}")
-def get_greeks(symbol: str):
+def get_greeks(symbol: str, conn = Depends(get_qdb_conn)):
     """Fetch latest Option Greeks from QuestDB"""
-    conn = None
     try:
-        conn = get_qdb_conn()
         cur = conn.cursor()
         query = "SELECT timestamp, symbol, iv, delta, gamma, theta, vega FROM option_greeks WHERE symbol = %s ORDER BY timestamp DESC LIMIT 1;"
         cur.execute(query, (symbol,))
@@ -142,8 +166,6 @@ def get_greeks(symbol: str):
         raise HTTPException(status_code=404, detail="Greeks not found for this symbol")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
 @app.get("/api/v1/market/ohlc")
 def get_ohlc(
@@ -151,12 +173,11 @@ def get_ohlc(
     start_date: str = Query(..., description="Start date YYYY-MM-DD"),
     end_date: str = Query(..., description="End date YYYY-MM-DD"),
     timeframe: str = Query("1m", description="Timeframe e.g. 1m, 5m, 1h, 1d"),
-    limit: int = Query(10000, le=10000, description="Max rows (capped at 10000)")
+    limit: int = Query(10000, le=10000, description="Max rows (capped at 10000)"),
+    conn = Depends(get_qdb_conn)
 ):
     """Fetch historical OHLC candles from QuestDB for a given symbol and date range."""
-    conn = None
     try:
-        conn = get_qdb_conn()
         cur = conn.cursor()
         # QuestDB PG wire requires ISO timestamps for comparison
         ts_start = f"{start_date}T00:00:00.000000Z"
@@ -188,15 +209,16 @@ def get_ohlc(
         return {"symbol": symbol, "timeframe": timeframe, "count": len(candles), "candles": candles}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
+
 
 @app.get("/api/v1/market/top-performers")
-def get_top_performers(limit: int = Query(10, le=50, description="Number of top stocks to return")):
+def get_top_performers(
+    limit: int = Query(10, le=50, description="Number of top stocks to return"),
+    conn = Depends(get_qdb_conn),
+    pg_conn = Depends(get_pg_conn)
+):
     """Fetch yesterday's top performing stocks by % change from QuestDB"""
-    conn = None
     try:
-        conn = get_qdb_conn()
         cur = conn.cursor()
         
         # 1. First find the most recent trading date in the DB
@@ -219,7 +241,7 @@ def get_top_performers(limit: int = Query(10, le=50, description="Number of top 
             WHERE timeframe = '1m'
               AND timestamp >= '{latest_ts}'
             SAMPLE BY 1d ALIGN TO CALENDAR
-            ORDER BY ((last(close) - first(open)) / first(open)) DESC
+            ORDER BY ((last(close) - first(open)) / CASE WHEN first(open) = 0 THEN 1 ELSE first(open) END) DESC
             LIMIT {limit};
         """)
         qdb_rows = cur.fetchall()
@@ -230,7 +252,6 @@ def get_top_performers(limit: int = Query(10, le=50, description="Number of top 
         # 3. Enhance with Postgres instrument metadata for human-readable names
         top_stocks = []
         try:
-            pg_conn = get_pg_conn()
             pg_cur = pg_conn.cursor()
             
             for r in qdb_rows:
@@ -271,25 +292,16 @@ def get_top_performers(limit: int = Query(10, le=50, description="Number of top 
                      "volume": int(r[3]),
                      "date": str(latest_date)
                  })
-        finally:
-            if 'pg_conn' in locals() and pg_conn:
-                pg_conn.close()
-
-        # Re-sort just in case
-        top_stocks.sort(key=lambda x: x['change_pct'], reverse=True)
         return top_stocks
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
+
 
 @app.get("/api/v1/trades")
-def get_trades(limit: int = 50):
+def get_trades(limit: int = 50, conn = Depends(get_pg_conn)):
     """Fetch recent trade history from Postgres"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         cur.execute("""
             SELECT timestamp, symbol, transaction_type, price, status, strategy_id 
@@ -303,15 +315,12 @@ def get_trades(limit: int = 50):
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
+
 
 @app.get("/api/v1/instruments/search")
-def search_instruments(query: str = Query(..., min_length=3)):
+def search_instruments(query: str = Query(..., min_length=3), conn = Depends(get_pg_conn)):
     """Search for symbols in the Instrument Master (Handy for finding Option Keys)"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         # Search by trading symbol or name (case-insensitive)
         search_param = f"%{query}%"
@@ -328,8 +337,7 @@ def search_instruments(query: str = Query(..., min_length=3)):
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
+
 
 class LiveStartRequest(BaseModel):
     strategy_name: str
@@ -389,11 +397,9 @@ def get_live_status():
         return {"status": "stopped", "message": f"Runtime Unavailable: {e}"}
 
 @app.get("/api/v1/live/trades")
-def get_live_trades(limit: int = 250):
+def get_live_trades(limit: int = 250, conn = Depends(get_pg_conn)):
     """Fetch recent execution history for the live trading dashboard"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         cur.execute("""
             SELECT timestamp, symbol, transaction_type, quantity, price, coalesce(pnl, 0), symbol as stock_name
@@ -407,8 +413,7 @@ def get_live_trades(limit: int = 250):
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
+
 
 @app.post("/api/v1/strategies/save")
 def save_strategy(request: StrategySaveRequest):
@@ -499,11 +504,9 @@ def stop_backtest(run_id: str):
         raise HTTPException(status_code=503, detail=f"Strategy Runtime Unavailable: {e}")
 
 @app.get("/api/v1/backtest/trades/{run_id}")
-def get_backtest_trades(run_id: str):
+def get_backtest_trades(run_id: str, conn = Depends(get_pg_conn)):
     """Fetch executed trades for a specific backtest run"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         cur.execute("""
             SELECT bo.timestamp, bo.symbol, bo.transaction_type, bo.quantity, bo.price, bo.pnl, bo.symbol as stock_name
@@ -518,15 +521,11 @@ def get_backtest_trades(run_id: str):
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
 @app.get("/api/v1/backtest/stats/{run_id}")
-def get_backtest_stats(run_id: str):
+def get_backtest_stats(run_id: str, conn = Depends(get_pg_conn)):
     """Fetch computed backtest statistics"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         cur.execute("""
             SELECT stats_json FROM backtest_results WHERE run_id = %s;
@@ -539,15 +538,11 @@ def get_backtest_stats(run_id: str):
         # Table might not exist yet if no backtest ran since update
         # logger.warning(f"Stats fetch error: {e}")
         return {}
-    finally:
-        if conn: conn.close()
 
 @app.get("/api/v1/backtest/universe/{run_id}")
-def get_backtest_universe(run_id: str):
+def get_backtest_universe(run_id: str, conn = Depends(get_pg_conn)):
     """Fetch scanner/universe results for a specific backtest run"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         cur.execute("""
             SELECT bu.date, bu.symbol, bu.score, i.symbol AS stock_name
@@ -568,8 +563,6 @@ def get_backtest_universe(run_id: str):
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
 @app.get("/api/v1/backtest/logs/{run_id}")
 def get_backtest_logs(run_id: str):
@@ -588,11 +581,9 @@ def get_backtest_logs(run_id: str):
 # --- BACKTEST HISTORY ---
 
 @app.get("/api/v1/backtest/history")
-def get_backtest_history():
+def get_backtest_history(conn = Depends(get_pg_conn)):
     """List all backtest runs with summary stats"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         cur.execute("""
             SELECT 
@@ -633,15 +624,11 @@ def get_backtest_history():
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
 @app.delete("/api/v1/backtest/{run_id}")
-def delete_backtest(run_id: str):
+def delete_backtest(run_id: str, conn = Depends(get_pg_conn)):
     """Delete a specific backtest run and all associated data"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         
         # Delete from all backtest tables (positions cascade from portfolios)
@@ -663,17 +650,13 @@ def delete_backtest(run_id: str):
         cur.close()
         return {"status": "deleted", "run_id": run_id, "orders_deleted": orders_deleted}
     except Exception as e:
-        if conn: conn.rollback()
+        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
 @app.delete("/api/v1/backtest/history")
-def clear_backtest_history():
+def clear_backtest_history(conn = Depends(get_pg_conn)):
     """Clear ALL backtest data"""
-    conn = None
     try:
-        conn = get_pg_conn()
         cur = conn.cursor()
         
         cur.execute("DELETE FROM backtest_positions;")
@@ -686,10 +669,8 @@ def clear_backtest_history():
         cur.close()
         return {"status": "cleared", "message": "All backtest history deleted"}
     except Exception as e:
-        if conn: conn.rollback()
+        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if conn: conn.close()
 
 
 

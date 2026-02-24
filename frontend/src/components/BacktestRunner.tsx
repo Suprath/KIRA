@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Link from 'next/link';
@@ -9,7 +9,7 @@ import {
     DialogContent,
     DialogTrigger,
 } from "@/components/ui/dialog";
-import { Play, Loader2, TrendingUp, Terminal as TerminalIcon, BarChart3, Clock, DollarSign, Activity, Settings2, Target, Percent, IndianRupee } from 'lucide-react';
+import { Play, Loader2, TrendingUp, BarChart3, Clock, DollarSign, Activity, Settings2, Target, Percent, IndianRupee } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -37,7 +37,6 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
     const pollIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
 
     const [isLoading, setIsLoading] = useState(false);
-    const [logs, setLogs] = useState<LogEntry[]>([]);
     const [isComplete, setIsComplete] = useState(false);
 
     const [equityHistory, setEquityHistory] = useState<{ time: string, equity: number }[]>([]);
@@ -79,9 +78,9 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
         brokeragePaid: 0.0
     });
 
-    const addLog = (message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info', time?: string) => {
-        const t = time || new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setLogs(prev => [...prev, { time: t, message, type }]);
+    const addLog = (message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+        // Log stripped for Dashboard UI
+        console.log(`[${type.toUpperCase()}] ${message}`);
     };
 
     const stopBacktest = async () => {
@@ -102,12 +101,9 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
     };
 
     const runBacktest = async () => {
-        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-
         setIsLoading(true);
         setIsComplete(false);
         setActiveRunId(null);
-        setLogs([]);
         setEquityHistory([]);
         setTrades([]);
         setStats({
@@ -159,7 +155,6 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                             if (match) return { time: match[1], type: match[2].toLowerCase(), message: match[3] };
                             return { time: '', type: 'info', message: l };
                         });
-                        setLogs(parsedLogs);
 
                         // Check for completion
                         const isFinished = parsedLogs.some((l) => l.message.includes("Backtest Runner Finished") || l.message.includes("Backtest Stopped"));
@@ -173,11 +168,12 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                                 const tradesData = await tradesRes.json();
                                 setTrades(tradesData);
 
-                                if (tradesData.length > 0) {
-                                    let currentEquity = config.cash;
-                                    let estBrokerage = 0;
-                                    const hist = [{ time: config.startDate, equity: currentEquity }];
+                                // Always construct graph history
+                                let currentEquity = config.cash;
+                                let estBrokerage = 0;
+                                const hist = [{ time: config.startDate, equity: currentEquity }];
 
+                                if (tradesData.length > 0) {
                                     tradesData.forEach((t: Trade) => {
                                         currentEquity += (t.pnl || 0);
 
@@ -194,11 +190,6 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                                         });
                                     });
 
-                                    if (isFinished) {
-                                        hist.push({ time: config.endDate, equity: currentEquity });
-                                    }
-                                    setEquityHistory(hist);
-
                                     const totalPnL = tradesData.reduce((acc: number, t: Trade) => acc + (t.pnl || 0), 0);
                                     setStats((prev) => ({
                                         ...prev,
@@ -208,6 +199,19 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                                         brokeragePaid: estBrokerage
                                     }));
                                 }
+
+                                // Always push the latest point (even if 0 trades) so AreaChart renders a line
+                                if (isFinished) {
+                                    hist.push({ time: config.endDate, equity: currentEquity });
+                                } else {
+                                    // Live continuous flatline point based on latest log time
+                                    const latestTime = parsedLogs.length > 0 ? parsedLogs[parsedLogs.length - 1].time : new Date().toLocaleTimeString();
+                                    if (latestTime) {
+                                        hist.push({ time: latestTime, equity: currentEquity });
+                                    }
+                                }
+
+                                setEquityHistory(hist);
                             }
                         } catch (err) {
                             console.error("Live trades fetch error", err);
@@ -257,7 +261,7 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
     };
 
     return (
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <Dialog open={isOpen} onOpenChange={setIsOpen} >
             <DialogTrigger asChild>
                 <div className="flex gap-2">
                     <Button size="sm" className="bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)] transition-all">
@@ -267,9 +271,9 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
             </DialogTrigger>
             <DialogContent className="max-w-[95vw] h-[95vh] bg-[#0a0a0b] border-slate-800 p-0 flex flex-col overflow-hidden text-slate-300 shadow-2xl">
                 {/* Header Control Bar */}
-                <div className="flex items-center justify-between border-b border-slate-800 bg-[#111113] p-4 shadow-md z-10 box-border h-20 shrink-0 min-h-[5rem]">
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-3 border-r border-slate-700 pr-5">
+                <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between border-b border-slate-800 bg-[#111113] p-4 shadow-md z-10 box-border shrink-0 min-h-[5rem] gap-4">
+                    <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full xl:w-auto">
+                        <div className="flex items-center gap-3 border-b md:border-b-0 md:border-r border-slate-700 pb-3 md:pb-0 pr-5 w-full md:w-auto shrink-0">
                             <Activity className="h-6 w-6 text-purple-500" />
                             <div>
                                 <h1 className="text-xl font-bold tracking-tight text-white">{strategyName}</h1>
@@ -278,7 +282,7 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                         </div>
 
                         {/* Config Controls inline */}
-                        <div className="flex items-center gap-3 pl-2">
+                        <div className="flex items-center gap-3 pl-0 md:pl-2 flex-wrap sm:flex-nowrap overflow-x-auto custom-scrollbar pb-2 sm:pb-0 w-full md:w-auto">
                             {/* Symbol Search Autocomplete */}
                             <div className="relative">
                                 <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800 cursor-text hover:border-slate-600 transition-colors w-[180px]">
@@ -371,7 +375,7 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 w-full xl:w-auto justify-end">
                         {isLoading ? (
                             <Button onClick={stopBacktest} variant="destructive" className="h-10 px-6 font-semibold shadow-[0_0_15px_rgba(239,68,68,0.4)]">
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" /> HALT EXECUTION
@@ -381,9 +385,10 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                                 <Play className="mr-2 h-4 w-4 fill-current" /> Initialize Run
                             </Button>
                         )}
+                        {/* Always visible when complete to draw attention, and with high contrast styling */}
                         {isComplete && lastRunId && (
                             <Link href={`/dashboard/backtest/${lastRunId}`} target="_blank">
-                                <Button variant="outline" className="h-10 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800">
+                                <Button className="h-10 bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_20px_rgba(79,70,229,0.5)] transition-all font-bold tracking-wide animate-pulse">
                                     <TrendingUp className="mr-2 h-4 w-4" /> Full Dashboard
                                 </Button>
                             </Link>
@@ -410,179 +415,125 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                                 )}
                             </div>
 
-                            <div className="flex-1 min-h-0 relative">
-                                {!isComplete && equityHistory.length === 0 ? (
-                                    <div className="absolute inset-0 flex items-center justify-center text-slate-600 font-mono text-sm border-2 border-dashed border-slate-800 rounded-lg">
-                                        {isLoading ? "Awaiting Data Stream..." : "Chart will render upon completion."}
-                                    </div>
-                                ) : (
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <AreaChart data={equityHistory} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                                            <defs>
-                                                <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
-                                                    <stop offset="5%" stopColor={stats.netProfit >= 0 ? "#3b82f6" : "#ef4444"} stopOpacity={0.3} />
-                                                    <stop offset="95%" stopColor={stats.netProfit >= 0 ? "#3b82f6" : "#ef4444"} stopOpacity={0} />
-                                                </linearGradient>
-                                            </defs>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                                            <XAxis
-                                                dataKey="time"
-                                                stroke="#475569"
-                                                fontSize={11}
-                                                tickMargin={10}
-                                                tickFormatter={(v) => v.split(',')[0]} // Just show date if long string
-                                            />
-                                            <YAxis
-                                                stroke="#475569"
-                                                fontSize={11}
-                                                tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`}
-                                                domain={['auto', 'auto']}
-                                            />
-                                            <Tooltip
-                                                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#f8fafc', borderRadius: '8px' }}
-                                                itemStyle={{ color: '#3b82f6' }}
-                                                formatter={(value: unknown) => [`₹${Number(value).toFixed(2)}`, 'Equity']}
-                                                labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
-                                            />
-                                            <Area
-                                                type="monotone"
-                                                dataKey="equity"
-                                                stroke={stats.netProfit >= 0 ? "#3b82f6" : "#ef4444"}
-                                                strokeWidth={2}
-                                                fillOpacity={1}
-                                                fill="url(#colorEquity)"
-                                                isAnimationActive={true}
-                                            />
-                                        </AreaChart>
-                                    </ResponsiveContainer>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Top Insights Layer */}
-                        <div className="grid grid-cols-5 gap-4 shrink-0">
-                            {[
-                                { label: "Net Profit", val: `₹${stats.netProfit.toFixed(1)}`, icon: IndianRupee, color: stats.netProfit >= 0 ? 'text-green-400' : 'text-red-400' },
-                                { label: "Win Rate", val: stats.winRate, icon: Target, color: 'text-blue-400' },
-                                { label: "Max Drawdown", val: stats.maxDrawdown, icon: Percent, color: 'text-red-400' },
-                                { label: "Sharpe Ratio", val: stats.sharpeRatio.toFixed(2), icon: Activity, color: 'text-purple-400' },
-                                { label: "Est. Brokerage", val: `₹${(stats.brokeragePaid || 0).toFixed(2)}`, icon: IndianRupee, color: 'text-yellow-500' },
-                            ].map((s, i) => (
-                                <div key={i} className="bg-[#111113] border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <span className="text-xs font-semibold text-slate-500 uppercase">{s.label}</span>
-                                        <s.icon className={`h-4 w-4 opacity-50 ${s.color}`} />
-                                    </div>
-                                    <span className={`text-xl font-bold tracking-tight font-mono ${s.color}`}>
-                                        {isComplete ? s.val : "---"}
-                                    </span>
+                            {!isComplete && equityHistory.length === 0 ? (
+                                <div className="absolute inset-0 flex items-center justify-center text-slate-600 font-mono text-sm border-2 border-dashed border-slate-800 rounded-lg">
+                                    {isLoading ? "Awaiting Data Stream..." : "Chart will render upon completion."}
                                 </div>
-                            ))}
-                        </div>
-
-                        {/* Trades Table */}
-                        <div className="flex-1 min-h-[250px] border border-slate-800 bg-[#111113] rounded-xl p-4 overflow-hidden flex flex-col shrink-0 mb-4">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-sm font-semibold text-white tracking-wide uppercase">Execution History</h3>
-                                <Badge variant="outline" className="border-slate-700 text-slate-400 font-mono">
-                                    {isComplete ? `${trades.length} TRADES` : "WAITING"}
-                                </Badge>
-                            </div>
-                            <div className="flex-1 overflow-y-auto custom-scrollbar border border-slate-800/50 rounded-lg">
-                                <table className="w-full text-sm text-left font-mono">
-                                    <thead className="text-xs uppercase bg-[#1a1a1e] text-slate-500 sticky top-0 z-10 shadow-sm">
-                                        <tr>
-                                            <th className="px-4 py-3 font-medium">Time</th>
-                                            <th className="px-4 py-3 font-medium">Symbol</th>
-                                            <th className="px-4 py-3 font-medium">Side</th>
-                                            <th className="px-4 py-3 font-medium text-right">Qty</th>
-                                            <th className="px-4 py-3 font-medium text-right">Price</th>
-                                            <th className="px-4 py-3 font-medium text-right">PnL</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-800">
-                                        {trades.length === 0 ? (
-                                            <tr>
-                                                <td colSpan={6} className="px-4 py-8 text-center text-slate-600">
-                                                    No executions recorded yet.
-                                                </td>
-                                            </tr>
-                                        ) : (
-                                            trades.map((t, idx) => (
-                                                <tr key={idx} className="hover:bg-[#151518] transition-colors">
-                                                    <td className="px-4 py-2 text-slate-400">{new Date(t.time).toLocaleString('en-US', { hour12: false, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
-                                                    <td className="px-4 py-2 font-medium text-slate-300">{t.symbol.split('|').pop()}</td>
-                                                    <td className="px-4 py-2">
-                                                        <span className={t.side === 'BUY' ? 'text-blue-400' : 'text-purple-400'}>{t.side}</span>
-                                                    </td>
-                                                    <td className="px-4 py-2 text-right text-slate-300">{t.quantity}</td>
-                                                    <td className="px-4 py-2 text-right text-slate-300">₹{t.price.toFixed(2)}</td>
-                                                    <td className={`px-4 py-2 text-right font-medium ${(t.pnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                        {t.pnl ? (t.pnl > 0 ? `+₹${t.pnl.toFixed(2)}` : `-₹${Math.abs(t.pnl).toFixed(2)}`) : "—"}
-                                                    </td>
-                                                </tr>
-                                            ))
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
+                            ) : ( // Ensure min 2 points are drawn
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={equityHistory.length === 1 ? [...equityHistory, ...equityHistory] : equityHistory} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                        <defs>
+                                            <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor={stats.netProfit >= 0 ? "#3b82f6" : "#ef4444"} stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor={stats.netProfit >= 0 ? "#3b82f6" : "#ef4444"} stopOpacity={0} />
+                                            </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                                        <XAxis
+                                            dataKey="time"
+                                            stroke="#475569"
+                                            fontSize={11}
+                                            tickMargin={10}
+                                            tickFormatter={(v) => v ? v.split(',')[0] : ''} // Just show date if long string
+                                        />
+                                        <YAxis
+                                            stroke="#475569"
+                                            fontSize={11}
+                                            tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`}
+                                            domain={['auto', 'auto']}
+                                        />
+                                        <Tooltip
+                                            contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#f8fafc', borderRadius: '8px' }}
+                                            itemStyle={{ color: '#3b82f6' }}
+                                            formatter={(value: unknown) => [`₹${Number(value).toFixed(2)}`, 'Equity']}
+                                            labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
+                                        />
+                                        <Area
+                                            type="monotone"
+                                            dataKey="equity"
+                                            stroke={stats.netProfit >= 0 ? "#3b82f6" : "#ef4444"}
+                                            strokeWidth={2}
+                                            fillOpacity={1}
+                                            fill="url(#colorEquity)"
+                                            isAnimationActive={true}
+                                        />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            )}
                         </div>
                     </div>
 
-                    {/* Right Panel: Terminal logs */}
-                    <div className="w-[450px] bg-[#0a0a0b] flex flex-col p-4 shrink-0 z-0">
-                        <div className="flex items-center gap-2 mb-3">
-                            <TerminalIcon className="h-4 w-4 text-slate-500" />
-                            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-widest">Runtime Telemetry</h3>
+                    {/* Top Insights Layer */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 shrink-0">
+                        {[
+                            { label: "Net Profit", val: `₹${stats.netProfit.toFixed(1)}`, icon: IndianRupee, color: stats.netProfit >= 0 ? 'text-green-400' : 'text-red-400' },
+                            { label: "Win Rate", val: stats.winRate, icon: Target, color: 'text-blue-400' },
+                            { label: "Max Drawdown", val: stats.maxDrawdown, icon: Percent, color: 'text-red-400' },
+                            { label: "Sharpe Ratio", val: stats.sharpeRatio.toFixed(2), icon: Activity, color: 'text-purple-400' },
+                            { label: "Est. Brokerage", val: `₹${(stats.brokeragePaid || 0).toFixed(2)}`, icon: IndianRupee, color: 'text-yellow-500' },
+                        ].map((s, i) => (
+                            <div key={i} className="bg-[#111113] border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+                                <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-1 sm:gap-0 mb-2">
+                                    <span className="text-xs font-semibold text-slate-500 uppercase truncate mr-2">{s.label}</span>
+                                    <s.icon className={`h-4 w-4 opacity-50 shrink-0 ${s.color}`} />
+                                </div>
+                                <span className={`text-xl font-bold tracking-tight font-mono ${s.color}`}>
+                                    {isComplete ? s.val : "---"}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Trades Table */}
+                    <div className="flex-1 min-h-[250px] border border-slate-800 bg-[#111113] rounded-xl p-4 overflow-hidden flex flex-col shrink-0 mb-4">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-sm font-semibold text-white tracking-wide uppercase">Execution History</h3>
+                            <Badge variant="outline" className="border-slate-700 text-slate-400 font-mono">
+                                {isComplete ? `${trades.length} TRADES` : "WAITING"}
+                            </Badge>
                         </div>
-                        <LogPanel logs={logs} isLoading={isLoading} />
+                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-800/50 rounded-lg">
+                            <table className="w-full text-sm text-left font-mono min-w-[600px]">
+                                <thead className="text-xs uppercase bg-[#1a1a1e] text-slate-500 sticky top-0 z-10 shadow-sm">
+                                    <tr>
+                                        <th className="px-4 py-3 font-medium">Time</th>
+                                        <th className="px-4 py-3 font-medium">Symbol</th>
+                                        <th className="px-4 py-3 font-medium">Side</th>
+                                        <th className="px-4 py-3 font-medium text-right">Qty</th>
+                                        <th className="px-4 py-3 font-medium text-right">Price</th>
+                                        <th className="px-4 py-3 font-medium text-right">PnL</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800">
+                                    {trades.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="px-4 py-8 text-center text-slate-600">
+                                                No executions recorded yet.
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        trades.map((t, idx) => (
+                                            <tr key={idx} className="hover:bg-[#151518] transition-colors">
+                                                <td className="px-4 py-2 text-slate-400">{new Date(t.time).toLocaleString('en-US', { hour12: false, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                                                <td className="px-4 py-2 font-medium text-slate-300">{t.symbol.split('|').pop()}</td>
+                                                <td className="px-4 py-2">
+                                                    <span className={t.side === 'BUY' ? 'text-blue-400' : 'text-purple-400'}>{t.side}</span>
+                                                </td>
+                                                <td className="px-4 py-2 text-right text-slate-300">{t.quantity}</td>
+                                                <td className="px-4 py-2 text-right text-slate-300">₹{t.price.toFixed(2)}</td>
+                                                <td className={`px-4 py-2 text-right font-medium ${(t.pnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                    {t.pnl ? (t.pnl > 0 ? `+₹${t.pnl.toFixed(2)}` : `-₹${Math.abs(t.pnl).toFixed(2)}`) : "—"}
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </DialogContent>
-        </Dialog>
+        </Dialog >
     );
 }
 
-function LogPanel({ logs, isLoading }: { logs: LogEntry[], isLoading: boolean }) {
-    const bottomRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        if (bottomRef.current) {
-            bottomRef.current.scrollTop = bottomRef.current.scrollHeight;
-        }
-    }, [logs]);
-
-    return (
-        <div
-            ref={bottomRef}
-            className="flex-1 bg-[#050505] border border-slate-800/80 rounded-xl p-4 overflow-y-auto font-mono text-xs shadow-inner custom-scrollbar relative"
-        >
-            <div className="space-y-1.5 pb-8">
-                {logs.length === 0 ? (
-                    <div className="text-slate-600 flex items-center justify-center h-full">System standby. Awaiting deployment.</div>
-                ) : (
-                    logs.map((log, i) => (
-                        <div key={i} className="flex gap-3 leading-relaxed hover:bg-white/5 px-1 -mx-1 rounded transition-colors break-words">
-                            <span className="text-slate-600 shrink-0 select-none">[{log.time || '--:--:--'}]</span>
-                            <span className={`
-                                ${log.type === 'error' ? 'text-red-400 font-semibold' : ''}
-                                ${log.type === 'success' ? 'text-green-400' : ''}
-                                ${log.type === 'warning' ? 'text-amber-400' : ''}
-                                ${log.type === 'info' ? 'text-slate-300' : 'text-slate-300'}
-                                flex-1
-                            `}>
-                                {log.message}
-                            </span>
-                        </div>
-                    ))
-                )}
-                {isLoading && (
-                    <div className="flex items-center gap-2 text-blue-500 mt-4 animate-pulse">
-                        <Loader2 className="h-3 w-3 animate-spin inline" />
-                        <span>Receiving telemetry stream...</span>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-}

@@ -192,27 +192,33 @@ class AlgorithmEngine:
             # 5. Inject Time
             self.Algorithm.Time = time_obj
 
-            # --- END OF DAY LOGIC & SQUARE-OFF (3:20 PM IST) ---
-            # For MIS (Intraday), force liquidation. For CNC, just log End-Of-Day equity for stats.
+            # --- END OF DAY LOGIC & SQUARE-OFF ---
+            # For MIS (Intraday), force liquidation at 3:20 PM. 
+            # For all modes, log End-Of-Day equity for stats when the date rolling over.
             ist_now = self._to_ist(time_obj)
             h, m = ist_now.hour, ist_now.minute
             today = ist_now.date()
             
-            # Reset flag on new day
+            # Record Daily Equity if the calendar day has rolled forward
             if self._last_square_off_date and self._last_square_off_date != today:
-                self._squared_off_today = False
-                self._last_square_off_date = None
-                
-            if h == self.SQUARE_OFF_HOUR and m >= self.SQUARE_OFF_MINUTE and not self._squared_off_today:
-                self._squared_off_today = True
-                self._last_square_off_date = today
-                
-                # Record Equity for Statistics (End of Day mark)
+                # We've entered a new day. Log the previous day's final equity
                 self.SyncPortfolio()
                 equity = self.Algorithm.Portfolio.get('TotalPortfolioValue', 0.0)
+                # Appending the timestamp of the new tick but representing yesterday's close
                 self.EquityCurve.append({'timestamp': ist_now, 'equity': equity})
                 
-                # Auto Square-Off ONLY for MIS mode
+                # Reset the flag completely for the new day
+                self._squared_off_today = False
+            
+            # Only set last square off date if it's currently None to initiate tracking
+            if self._last_square_off_date is None:
+                self._last_square_off_date = today
+
+            # Auto Square-Off at 3:20 PM (ONLY for MIS mode)
+            if h == self.SQUARE_OFF_HOUR and m >= self.SQUARE_OFF_MINUTE and not self._squared_off_today:
+                self._squared_off_today = True
+                
+                # Double-check MIS explicitly
                 if self.TradingMode != "CNC":
                     has_positions = any(
                         isinstance(hold, SecurityHolding) and hold.Invested
@@ -224,12 +230,6 @@ class AlgorithmEngine:
                         self.Liquidate()
                 
                 return # Block new trades after 3:20 PM
-
-            # 6. Reset square-off flag for new day (handled in _should_square_off now)
-            # ist_now = self._to_ist(time_obj)
-            # today = ist_now.date()
-            # if self._last_square_off_date and self._last_square_off_date != today:
-            #     self._last_square_off_date = None
 
             # 7. Realtime Portfolio Valuation
             self.CalculatePortfolioValue()
@@ -294,6 +294,12 @@ class AlgorithmEngine:
             for tick in self.LocalData:
                 self.ProcessTick(tick)
                 if delay > 0: time.sleep(delay)
+            
+            # Finalize Equity Curve
+            self.SyncPortfolio()
+            equity = self.Algorithm.Portfolio.get('TotalPortfolioValue', 0.0)
+            self.EquityCurve.append({'timestamp': datetime.now(), 'equity': equity})
+            
             logger.info("✅ Backtest Data Exhausted.")
             return
 

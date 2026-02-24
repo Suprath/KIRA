@@ -2,7 +2,7 @@ import { ServiceHealth } from "@/components/ServiceHealth";
 import { TopPerformersTable } from "@/components/dashboard/TopPerformersTable";
 import Link from 'next/link';
 import { Button } from "@/components/ui/button";
-import { Code, Terminal, Book, BrainCircuit, Settings, Activity } from 'lucide-react';
+import { Code, Terminal, Book, Settings, Activity } from 'lucide-react';
 
 export default function DashboardPage() {
   return (
@@ -18,11 +18,7 @@ export default function DashboardPage() {
               <Code className="mr-2 h-4 w-4" /> Strategy IDE
             </Button>
           </Link>
-          <Link href="/esti">
-            <Button variant="outline">
-              <BrainCircuit className="mr-2 h-4 w-4 text-purple-500" /> ESTI AI
-            </Button>
-          </Link>
+
           <Link href="/dashboard/live">
             <Button variant="outline" className="border-blue-500/20 hover:bg-blue-500/10 hover:text-blue-500 transition-colors">
               <Activity className="mr-2 h-4 w-4 text-blue-500" /> Live Trading

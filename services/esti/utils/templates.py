@@ -82,6 +82,10 @@ class AutonomousESTI(BaseStrategy):
         return torch.FloatTensor(state).unsqueeze(0)
 
     def OnData(self, data):
+        # PERFORMANCE FIX: Execute Swing Strategy logic only once per day (near market close)
+        if self.Time.hour != 15 or self.Time.minute != 15:
+            return
+
         for symbol in self.symbols:
             if not data.ContainsKey(symbol): continue
             current_price = data[symbol].Price

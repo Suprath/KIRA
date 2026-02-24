@@ -65,8 +65,8 @@ def get_watchlist():
         conn = get_db_connection()
         if not conn: return []
         cur = conn.cursor()
-        # We pick 100 stocks from NSE_EQ segment
-        cur.execute("SELECT instrument_token FROM instruments WHERE exchange = 'NSE_EQ' AND segment = 'EQUITY' LIMIT 100;")
+        # We pick 100 stocks from NSE_EQ and BSE_EQ segments
+        cur.execute("SELECT instrument_token FROM instruments WHERE exchange IN ('NSE_EQ', 'BSE_EQ') AND segment = 'EQUITY' LIMIT 100;")
         symbols = [r[0] for r in cur.fetchall()]
         cur.close()
         conn.close()

@@ -13,6 +13,7 @@ import { Play, Loader2, TrendingUp, Terminal as TerminalIcon, BarChart3, Clock, 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { Search } from 'lucide-react';
 
 interface Trade {
     time: string;
@@ -41,6 +42,22 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
 
     const [equityHistory, setEquityHistory] = useState<{ time: string, equity: number }[]>([]);
     const [trades, setTrades] = useState<Trade[]>([]);
+
+    const [searchQuery, setSearchQuery] = useState("");
+    const [searchResults, setSearchResults] = useState<{ key: string, symbol: string, name: string, exchange: string, lot_size: number }[]>([]);
+    const [searchOpen, setSearchOpen] = useState(false);
+
+    useEffect(() => {
+        if (searchQuery.length >= 3) {
+            const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+            fetch(`${API_URL}/api/v1/instruments/search?query=${searchQuery}`)
+                .then(r => r.json())
+                .then(setSearchResults)
+                .catch(() => setSearchResults([]));
+        } else {
+            setSearchResults([]);
+        }
+    }, [searchQuery]);
 
     const [config, setConfig] = useState({
         symbol: "NSE_EQ|INE002A01018",
@@ -262,6 +279,57 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
 
                         {/* Config Controls inline */}
                         <div className="flex items-center gap-3 pl-2">
+                            {/* Symbol Search Autocomplete */}
+                            <div className="relative">
+                                <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800 cursor-text hover:border-slate-600 transition-colors w-[180px]">
+                                    <Search className="h-4 w-4 text-slate-500 shrink-0" />
+                                    <input
+                                        value={searchQuery || (config?.symbol ? config.symbol.split('|').pop() : "")}
+                                        onChange={(e) => {
+                                            setSearchQuery(e.target.value);
+                                            setSearchOpen(true);
+                                        }}
+                                        onFocus={() => setSearchOpen(true)}
+                                        placeholder="Search Symbol..."
+                                        className="bg-transparent border-none outline-none text-sm font-mono text-white w-full placeholder:text-slate-600"
+                                    />
+                                </div>
+
+                                {searchOpen && searchResults.length > 0 && (
+                                    <div className="absolute top-full left-0 mt-2 w-[300px] bg-[#1a1a1e] border border-slate-700 rounded-md shadow-2xl z-50 max-h-[300px] overflow-y-auto custom-scrollbar">
+                                        {searchResults.map((s, idx) => (
+                                            <div
+                                                key={idx}
+                                                className="p-2 px-3 hover:bg-blue-600/20 hover:text-blue-400 cursor-pointer border-b border-slate-800 last:border-0 flex justify-between items-center transition-colors"
+                                                onClick={() => {
+                                                    setConfig({ ...config, symbol: s.key });
+                                                    setSearchQuery(s.symbol);
+                                                    setSearchOpen(false);
+                                                }}
+                                            >
+                                                <div>
+                                                    <div className="font-mono font-bold text-sm text-slate-300">{s.symbol}</div>
+                                                    <div className="text-xs text-slate-500 truncate max-w-[180px]">{s.name}</div>
+                                                </div>
+                                                <Badge variant="outline" className={s.exchange === "NSE_EQ" ? "border-blue-500/30 text-blue-500" : "border-green-500/30 text-green-500"}>
+                                                    {s.exchange}
+                                                </Badge>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {searchOpen && searchQuery.length >= 3 && searchResults.length === 0 && (
+                                    <div className="absolute top-full left-0 mt-2 w-[300px] bg-[#1a1a1e] border border-slate-700 rounded-md shadow-2xl z-50 p-4 text-sm text-slate-500 text-center">
+                                        No symbols found.
+                                    </div>
+                                )}
+                                {/* Close absolute overlay if click outside */}
+                                {searchOpen && (
+                                    <div className="fixed inset-0 z-40" onClick={() => setSearchOpen(false)} />
+                                )}
+                            </div>
+
                             <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800">
                                 <Clock className="h-4 w-4 text-slate-500" />
                                 <Input type="date" value={config.startDate} onChange={e => setConfig({ ...config, startDate: e.target.value })} className="h-7 w-[125px] bg-transparent border-none focus-visible:ring-0 px-0 text-sm font-mono text-white" />

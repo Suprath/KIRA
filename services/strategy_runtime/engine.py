@@ -151,40 +151,6 @@ class AlgorithmEngine:
         market_close = h < 15 or (h == 15 and m <= 30)
         return market_open and market_close
 
-    def _should_square_off(self, time_obj):
-        """Check if it's time for mandatory intraday square-off (3:20 PM IST)."""
-        if self.TradingMode == "CNC":
-            return False
-            
-        ist = self._to_ist(time_obj)
-        today = ist.date()
-        
-        # Reset _squared_off_today flag at the start of a new day
-        if self._last_square_off_date and self._last_square_off_date != today:
-            self._squared_off_today = False
-            self._last_square_off_date = None
-
-        if self._squared_off_today:
-            return False  # Already squared off today
-
-        h, m = ist.hour, ist.minute
-        
-        # Debug log for first few checks of the day
-        if m == 0 and h in [9, 12, 15]: 
-             logger.debug(f"🕒 Time Check: {ist} (Hour: {h}, Minute: {m})")
-
-        if h == self.SQUARE_OFF_HOUR and m >= self.SQUARE_OFF_MINUTE:
-            logger.debug(f"🕒 Square-off condition met at {ist}")
-            self._squared_off_today = True # Mark as squared off for today
-            self._last_square_off_date = today
-            
-            # Record Equity for Statistics (At 3:20 PM or whenever we square off)
-            self.SyncPortfolio()
-            equity = self.Algorithm.Portfolio.get('TotalPortfolioValue', 0.0)
-            self.EquityCurve.append({'timestamp': ist, 'equity': equity})
-            
-            return True
-        return False
 
     def ProcessTick(self, tick_dict):
         # 1. Parse Data
@@ -226,20 +192,38 @@ class AlgorithmEngine:
             # 5. Inject Time
             self.Algorithm.Time = time_obj
 
-            # --- INTRADAY SQUARE-OFF (3:20 PM IST) ---
-            # Indian rule: ALL intraday positions must be closed by 3:20 PM.
-            if self._should_square_off(time_obj):
+            # --- END OF DAY LOGIC & SQUARE-OFF (3:20 PM IST) ---
+            # For MIS (Intraday), force liquidation. For CNC, just log End-Of-Day equity for stats.
+            ist_now = self._to_ist(time_obj)
+            h, m = ist_now.hour, ist_now.minute
+            today = ist_now.date()
+            
+            # Reset flag on new day
+            if self._last_square_off_date and self._last_square_off_date != today:
+                self._squared_off_today = False
+                self._last_square_off_date = None
+                
+            if h == self.SQUARE_OFF_HOUR and m >= self.SQUARE_OFF_MINUTE and not self._squared_off_today:
+                self._squared_off_today = True
+                self._last_square_off_date = today
+                
+                # Record Equity for Statistics (End of Day mark)
                 self.SyncPortfolio()
-                has_positions = any(
-                    isinstance(h, SecurityHolding) and h.Invested
-                    for sym, h in self.Algorithm.Portfolio.items()
-                    if sym not in ('Cash', 'TotalPortfolioValue')
-                )
-                if has_positions:
-                    logger.info("⏰ 3:20 PM IST — AUTO SQUARE-OFF: Liquidating all intraday positions")
-                    self.Liquidate()
-                # No new trades after square-off for the day
-                return  
+                equity = self.Algorithm.Portfolio.get('TotalPortfolioValue', 0.0)
+                self.EquityCurve.append({'timestamp': ist_now, 'equity': equity})
+                
+                # Auto Square-Off ONLY for MIS mode
+                if self.TradingMode != "CNC":
+                    has_positions = any(
+                        isinstance(hold, SecurityHolding) and hold.Invested
+                        for sym, hold in self.Algorithm.Portfolio.items()
+                        if sym not in ('Cash', 'TotalPortfolioValue')
+                    )
+                    if has_positions:
+                        logger.info("⏰ 3:20 PM IST — AUTO SQUARE-OFF: Liquidating all intraday positions")
+                        self.Liquidate()
+                
+                return # Block new trades after 3:20 PM
 
             # 6. Reset square-off flag for new day (handled in _should_square_off now)
             # ist_now = self._to_ist(time_obj)

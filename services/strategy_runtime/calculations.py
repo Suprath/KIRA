@@ -1,0 +1,472 @@
+"""
+Calculations Module — Centralized Financial Metrics Engine
+===========================================================
+Pure, stateless functions for every financial metric used across the
+quant-platform ecosystem.  All helpers are independently testable.
+
+Covers:
+  • Portfolio equity valuation
+  • Transaction cost modelling (SEBI-compliant Indian equities)
+  • Sharpe / Sortino / Calmar ratios
+  • CAGR, Max Drawdown (with duration), Win Rate, Profit Factor, Expectancy
+  • A master `compute_all_statistics` aggregator
+"""
+
+import os
+import math
+import logging
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+
+logger = logging.getLogger("Calculations")
+
+# ────────────────────────────────────────────────────────────
+# 1.  TRANSACTION COST MODEL  (SEBI / NSE Equity)
+# ────────────────────────────────────────────────────────────
+
+class TransactionCostCalculator:
+    """
+    Indian Equity Transaction Cost Model (NSE / BSE)
+
+    Realistic charges as per SEBI regulations (updated FY 2024-25):
+      • Brokerage       — min(flat ₹20, 0.03 % of turnover)
+      • STT             — 0.025 % sell-side (MIS) / 0.1 % both sides (CNC)
+      • Exchange Txn    — 0.00345 %
+      • SEBI Fee        — 0.0001 %
+      • Stamp Duty      — 0.003 % buy (MIS) / 0.015 % buy (CNC)
+      • GST             — 18 % on (brokerage + exchange + SEBI)
+    """
+
+    # Default regulatory rates
+    BROKERAGE_FLAT  = 20.0
+    BROKERAGE_PCT   = 0.0003      # 0.03 %
+    STT_SELL_MIS    = 0.00025     # 0.025 %  (sell-side only for intraday)
+    STT_BOTH_CNC   = 0.001       # 0.1 %    (both sides for delivery)
+    EXCHANGE_TXN    = 0.0000345   # 0.00345 %
+    SEBI_FEE        = 0.000001    # 0.0001 %
+    STAMP_MIS       = 0.00003     # 0.003 %  (buy-side only)
+    STAMP_CNC       = 0.00015     # 0.015 %  (buy-side only)
+    GST_RATE        = 0.18        # 18 %
+
+    def __init__(self, trading_mode: str = "MIS"):
+        self.trading_mode = trading_mode.upper()
+
+    def calculate(self, turnover: float, side: str) -> float:
+        """
+        Calculate total transaction charges for a single leg.
+
+        Parameters
+        ----------
+        turnover : float   — price × quantity (absolute value)
+        side     : str     — 'BUY' or 'SELL'
+
+        Returns
+        -------
+        float — total charges (positive number, rounded to 2 dp)
+        """
+        if turnover <= 0:
+            return 0.0
+
+        side = side.upper()
+
+        brokerage_flat = float(os.getenv('BROKERAGE_FLAT', self.BROKERAGE_FLAT))
+        brokerage_pct  = float(os.getenv('BROKERAGE_PCT', self.BROKERAGE_PCT))
+
+        # 1. Brokerage
+        brokerage = min(brokerage_flat, turnover * brokerage_pct)
+
+        # 2. STT
+        if self.trading_mode == "CNC":
+            stt = turnover * self.STT_BOTH_CNC
+        else:
+            stt = turnover * self.STT_SELL_MIS if side == "SELL" else 0.0
+
+        # 3. Exchange transaction charges
+        exchange_txn = turnover * self.EXCHANGE_TXN
+
+        # 4. SEBI turnover fee
+        sebi_fee = turnover * self.SEBI_FEE
+
+        # 5. Stamp duty (buy-side only)
+        if side == "BUY":
+            stamp_duty = turnover * (self.STAMP_CNC if self.trading_mode == "CNC" else self.STAMP_MIS)
+        else:
+            stamp_duty = 0.0
+
+        # 6. GST: 18 % on (brokerage + exchange + SEBI)
+        gst = (brokerage + exchange_txn + sebi_fee) * self.GST_RATE
+
+        total = brokerage + stt + exchange_txn + sebi_fee + stamp_duty + gst
+        return round(total, 2)
+
+    def round_trip_cost(self, price: float, quantity: int) -> float:
+        """Full round-trip cost (BUY + SELL) for a given position."""
+        turnover = price * abs(quantity)
+        return self.calculate(turnover, "BUY") + self.calculate(turnover, "SELL")
+
+
+# ────────────────────────────────────────────────────────────
+# 2.  EQUITY & PORTFOLIO HELPERS
+# ────────────────────────────────────────────────────────────
+
+def compute_portfolio_value(
+    cash: float,
+    holdings: Dict[str, Any],
+    price_map: Dict[str, float],
+) -> float:
+    """
+    Compute total portfolio equity.
+
+    Parameters
+    ----------
+    cash       : available cash balance
+    holdings   : dict  {symbol: SecurityHolding} (needs .Quantity, .AveragePrice)
+    price_map  : dict  {symbol: latest_price}
+
+    Returns
+    -------
+    float — cash + mark-to-market value of all positions
+    """
+    equity = cash
+    for sym, holding in holdings.items():
+        if sym in ("Cash", "TotalPortfolioValue"):
+            continue
+        qty = getattr(holding, "Quantity", 0)
+        if qty == 0:
+            continue
+        price = price_map.get(sym) or getattr(holding, "AveragePrice", 0)
+        equity += qty * price
+    return equity
+
+
+# ────────────────────────────────────────────────────────────
+# 3.  RETURN SERIES HELPERS
+# ────────────────────────────────────────────────────────────
+
+def _build_returns(
+    equity_curve: List[Dict],
+    initial_capital: float,
+) -> Tuple[pd.Series, int]:
+    """
+    Convert a list of {'timestamp', 'equity'} dicts to a return Series.
+
+    Strategy:
+      1. Try daily resampling first (preferred for long backtests).
+      2. If daily gives < 3 points, fall back to per-tick returns
+         (each equity snapshot becomes a data point).
+
+    Returns
+    -------
+    (returns Series, annualisation_factor)
+      - annualisation_factor = 252 for daily, or estimated from tick frequency
+    """
+    if not equity_curve:
+        return pd.Series(dtype=float), 252
+
+    df = pd.DataFrame(equity_curve)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df.set_index("timestamp", inplace=True)
+    df["equity"] = pd.to_numeric(df["equity"])
+    df.sort_index(inplace=True)
+
+    # --- Attempt 1: daily resampling ---
+    daily = df.resample("D").last().ffill()
+    if len(daily) >= 3:
+        day_before = daily.index.min() - pd.Timedelta(days=1)
+        baseline = pd.DataFrame({"equity": [initial_capital]}, index=[day_before])
+        full = pd.concat([baseline, daily])
+        returns = full["equity"].pct_change().dropna()
+        returns = returns.replace([np.inf, -np.inf], 0.0)
+        return returns, 252
+
+    # --- Attempt 2: per-tick returns (for short backtests) ---
+    # Prepend initial capital so first move is captured
+    first_ts = df.index.min() - pd.Timedelta(seconds=1)
+    baseline = pd.DataFrame({"equity": [initial_capital]}, index=[first_ts])
+    full = pd.concat([baseline, df])
+    # Remove duplicate indices keeping last
+    full = full[~full.index.duplicated(keep="last")]
+    full.sort_index(inplace=True)
+
+    returns = full["equity"].pct_change().dropna()
+    returns = returns.replace([np.inf, -np.inf], 0.0)
+
+    # Estimate annualisation factor from average tick spacing
+    # (e.g. if ticks are ~1 minute apart in a 6.25h trading day → ~375 per day → 375×252)
+    if len(full) >= 2:
+        total_span = (full.index[-1] - full.index[0]).total_seconds()
+        avg_interval = total_span / max(len(full) - 1, 1)
+        if avg_interval > 0:
+            ticks_per_day = (6.25 * 3600) / avg_interval  # NSE = 6.25 hours
+            ann_factor = max(int(ticks_per_day * 252), 1)
+        else:
+            ann_factor = 252
+    else:
+        ann_factor = 252
+
+    return returns, ann_factor
+
+
+# Backward-compatible wrapper (used by existing tests)
+def _build_daily_returns(
+    equity_curve: List[Dict],
+    initial_capital: float,
+) -> pd.Series:
+    """Legacy wrapper — returns only the Series (daily preferred)."""
+    returns, _ = _build_returns(equity_curve, initial_capital)
+    return returns
+
+
+# ────────────────────────────────────────────────────────────
+# 4.  CORE METRIC FUNCTIONS
+# ────────────────────────────────────────────────────────────
+
+def compute_sharpe_ratio(
+    equity_curve: List[Dict],
+    initial_capital: float,
+    risk_free_rate: float = 0.06,
+) -> float:
+    """
+    Annualised Sharpe Ratio.
+
+    Uses daily returns when available (≥ 3 days), otherwise per-tick returns
+    with an appropriately scaled annualisation factor.
+    """
+    returns, ann_factor = _build_returns(equity_curve, initial_capital)
+    if len(returns) < 3:
+        return 0.0
+
+    rf_per_period = risk_free_rate / ann_factor
+    excess = returns - rf_per_period
+    std = excess.std()
+    if std < 1e-8:
+        return 0.0
+
+    sharpe = (excess.mean() / std) * math.sqrt(ann_factor)
+    return round(max(-10, min(10, sharpe)), 2)
+
+
+def compute_sortino_ratio(
+    equity_curve: List[Dict],
+    initial_capital: float,
+    risk_free_rate: float = 0.06,
+) -> float:
+    """
+    Sortino Ratio — like Sharpe but only penalises downside volatility.
+
+    Uses the same per-tick fallback as Sharpe for short backtests.
+    """
+    returns, ann_factor = _build_returns(equity_curve, initial_capital)
+    if len(returns) < 3:
+        return 0.0
+
+    rf_per_period = risk_free_rate / ann_factor
+    excess = returns - rf_per_period
+    downside = excess[excess < 0]
+
+    if len(downside) < 2:
+        return 0.0
+
+    downside_std = downside.std()
+    if downside_std < 1e-8:
+        return 0.0
+
+    sortino = (excess.mean() / downside_std) * math.sqrt(ann_factor)
+    return round(max(-10, min(10, sortino)), 2)
+
+
+def compute_max_drawdown(equity_curve: List[Dict]) -> Dict[str, Any]:
+    """
+    Maximum peak-to-trough drawdown.
+
+    Returns
+    -------
+    dict with keys:
+        max_drawdown_pct  : float  (negative %, e.g. -12.5)
+        peak_date         : datetime or None
+        trough_date       : datetime or None
+        duration_days     : int
+    """
+    result = {"max_drawdown_pct": 0.0, "peak_date": None, "trough_date": None, "duration_days": 0}
+
+    if not equity_curve or len(equity_curve) < 2:
+        return result
+
+    df = pd.DataFrame(equity_curve)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df.set_index("timestamp", inplace=True)
+    df["equity"] = pd.to_numeric(df["equity"])
+
+    rolling_max = df["equity"].cummax()
+    drawdown = (df["equity"] - rolling_max) / rolling_max
+
+    if drawdown.empty:
+        return result
+
+    min_idx = drawdown.idxmin()
+    result["max_drawdown_pct"] = round(float(drawdown.min()) * 100, 2)
+    result["trough_date"] = min_idx
+
+    # Find the peak that preceded the trough
+    peak_series = rolling_max.loc[:min_idx]
+    if not peak_series.empty:
+        result["peak_date"] = peak_series.idxmax()
+        result["duration_days"] = (min_idx - result["peak_date"]).days
+
+    return result
+
+
+def compute_cagr(
+    initial_capital: float,
+    final_capital: float,
+    trading_days: int,
+) -> float:
+    """
+    Compound Annual Growth Rate.
+
+    CAGR = (final / initial) ^ (252 / trading_days) - 1
+    """
+    if initial_capital <= 0 or final_capital <= 0 or trading_days <= 0:
+        return 0.0
+    years = trading_days / 252
+    if years < 0.01:
+        return 0.0
+    cagr = (final_capital / initial_capital) ** (1 / years) - 1
+    return round(cagr * 100, 2)
+
+
+def compute_calmar_ratio(cagr: float, max_drawdown_pct: float) -> float:
+    """
+    Calmar Ratio = CAGR / |Max Drawdown|
+
+    Both inputs are percentages (e.g. cagr=15.0, max_dd=-12.5).
+    """
+    abs_dd = abs(max_drawdown_pct)
+    if abs_dd < 0.01:
+        return 0.0
+    return round(cagr / abs_dd, 2)
+
+
+# ────────────────────────────────────────────────────────────
+# 5.  TRADE-LEVEL METRICS
+# ────────────────────────────────────────────────────────────
+
+def compute_win_rate(pnl_list: List[float]) -> float:
+    """Percentage of profitable trades (PnL > 0)."""
+    if not pnl_list:
+        return 0.0
+    wins = sum(1 for p in pnl_list if p > 0)
+    return round((wins / len(pnl_list)) * 100, 1)
+
+
+def compute_profit_factor(pnl_list: List[float]) -> float:
+    """
+    Gross Profit / Gross Loss.
+
+    Returns 99.99 if no losses, 0.0 if no wins.
+    """
+    if not pnl_list:
+        return 0.0
+    gross_profit = sum(p for p in pnl_list if p > 0)
+    gross_loss   = abs(sum(p for p in pnl_list if p < 0))
+    if gross_loss < 0.01:
+        return 99.99 if gross_profit > 0 else 0.0
+    return round(gross_profit / gross_loss, 2)
+
+
+def compute_expectancy(pnl_list: List[float]) -> float:
+    """Average expected PnL per trade."""
+    if not pnl_list:
+        return 0.0
+    return round(sum(pnl_list) / len(pnl_list), 2)
+
+
+def compute_avg_win_loss(pnl_list: List[float]) -> Tuple[float, float]:
+    """
+    Returns (avg_win, avg_loss).
+    avg_loss is returned as a negative number.
+    """
+    wins   = [p for p in pnl_list if p > 0]
+    losses = [p for p in pnl_list if p < 0]
+    avg_win  = round(sum(wins)   / len(wins),   2) if wins   else 0.0
+    avg_loss = round(sum(losses) / len(losses), 2) if losses else 0.0
+    return avg_win, avg_loss
+
+
+def compute_total_return(initial_capital: float, final_equity: float) -> float:
+    """Total return as a percentage."""
+    if initial_capital <= 0:
+        return 0.0
+    return round(((final_equity - initial_capital) / initial_capital) * 100, 2)
+
+
+def compute_net_profit(initial_capital: float, final_equity: float) -> float:
+    """Absolute net profit/loss."""
+    return round(final_equity - initial_capital, 2)
+
+
+# ────────────────────────────────────────────────────────────
+# 6.  MASTER AGGREGATOR
+# ────────────────────────────────────────────────────────────
+
+def compute_all_statistics(
+    equity_curve: List[Dict],
+    pnl_list: List[float],
+    initial_capital: float,
+    trading_days: int = 0,
+    risk_free_rate: float = 0.06,
+) -> Dict[str, Any]:
+    """
+    Compute every metric in one call.
+
+    Parameters
+    ----------
+    equity_curve    : list of {'timestamp', 'equity'} dicts
+    pnl_list        : list of per-trade PnL floats
+    initial_capital : starting cash
+    trading_days    : number of trading days in the period (0 = auto-detect)
+    risk_free_rate  : annual risk-free rate (default 6 % — India 10Y bond)
+
+    Returns
+    -------
+    dict with all metric keys
+    """
+    # Final equity from curve
+    if equity_curve:
+        final_equity = float(equity_curve[-1].get("equity", initial_capital))
+    else:
+        final_equity = initial_capital
+
+    # Auto-detect trading days from equity curve length
+    if trading_days <= 0 and equity_curve:
+        returns = _build_daily_returns(equity_curve, initial_capital)
+        trading_days = max(len(returns), 1)
+
+    dd_info = compute_max_drawdown(equity_curve)
+    cagr = compute_cagr(initial_capital, final_equity, trading_days)
+    avg_win, avg_loss = compute_avg_win_loss(pnl_list)
+
+    return {
+        # Return metrics
+        "total_return":     compute_total_return(initial_capital, final_equity),
+        "net_profit":       compute_net_profit(initial_capital, final_equity),
+        "cagr":             cagr,
+
+        # Risk metrics
+        "sharpe_ratio":     compute_sharpe_ratio(equity_curve, initial_capital, risk_free_rate),
+        "sortino_ratio":    compute_sortino_ratio(equity_curve, initial_capital, risk_free_rate),
+        "max_drawdown":     dd_info["max_drawdown_pct"],
+        "max_dd_duration":  dd_info["duration_days"],
+        "calmar_ratio":     compute_calmar_ratio(cagr, dd_info["max_drawdown_pct"]),
+
+        # Trade metrics
+        "total_trades":     len(pnl_list),
+        "win_rate":         compute_win_rate(pnl_list),
+        "profit_factor":    compute_profit_factor(pnl_list),
+        "expectancy":       compute_expectancy(pnl_list),
+        "avg_win":          avg_win,
+        "avg_loss":         avg_loss,
+    }

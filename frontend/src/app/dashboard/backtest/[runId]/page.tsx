@@ -6,9 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Loader2, TrendingUp, Activity, IndianRupee } from 'lucide-react';
+import {
+    ArrowLeft, Loader2, TrendingUp, TrendingDown, Activity,
+    IndianRupee, BarChart3, Target, Percent, Scale, Clock, Zap
+} from 'lucide-react';
 import Link from 'next/link';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 import { ScannerResults } from "@/components/ScannerResults";
 
 interface Trade {
@@ -23,11 +26,19 @@ interface Trade {
 
 interface Stats {
     netProfit: number;
-    totalReturn: number; // percentage
-    maxDrawdown: number; // percentage
-    winRate: number; // percentage
+    totalReturn: number;
+    maxDrawdown: number;
+    maxDdDuration: number;
+    winRate: number;
     totalTrades: number;
     sharpeRatio: number;
+    sortinoRatio: number;
+    calmarRatio: number;
+    cagr: number;
+    profitFactor: number;
+    expectancy: number;
+    avgWin: number;
+    avgLoss: number;
     brokeragePaid: number;
 }
 
@@ -40,7 +51,6 @@ export default function BacktestResultPage() {
     const params = useParams();
     const runId = params.runId as string;
     const [trades, setTrades] = useState<Trade[]>([]);
-    // const [logs, setLogs] = useState<string[]>([]); // Unused for now
     const [loading, setLoading] = useState(true);
     const [stats, setStats] = useState<Stats | null>(null);
     const [equityCurve, setEquityCurve] = useState<EquityCurvePoint[]>([]);
@@ -52,7 +62,6 @@ export default function BacktestResultPage() {
             try {
                 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
-                // Fetch Trades & Stats
                 const [tradesRes, statsRes] = await Promise.all([
                     fetch(`${API_URL}/api/v1/backtest/trades/${runId}`),
                     fetch(`${API_URL}/api/v1/backtest/stats/${runId}`)
@@ -80,7 +89,7 @@ export default function BacktestResultPage() {
     const processBacktestData = (tradesData: Trade[], statsData: Record<string, number> | null) => {
         setTrades(tradesData);
 
-        const initialCash = 100000; // Default if not provided
+        const initialCash = 100000;
         let currentEquity = initialCash;
         let estBrokerage = 0;
 
@@ -88,7 +97,6 @@ export default function BacktestResultPage() {
         const curve = [{ time: 'Start', equity: initialCash }];
 
         tradesData.forEach(t => {
-            // Estimate Brokerage
             const turnover = t.price * Math.abs(t.quantity);
             const flat = Math.min(20, turnover * 0.0003);
             const stt = t.side === 'SELL' ? turnover * 0.00025 : 0;
@@ -106,22 +114,28 @@ export default function BacktestResultPage() {
 
         if (statsData && statsData.sharpe_ratio !== undefined) {
             setStats({
-                netProfit: statsData.net_profit,
-                totalReturn: statsData.total_return,
-                maxDrawdown: statsData.max_drawdown,
-                winRate: statsData.win_rate,
-                totalTrades: statsData.total_trades,
-                sharpeRatio: statsData.sharpe_ratio,
+                netProfit: statsData.net_profit ?? 0,
+                totalReturn: statsData.total_return ?? 0,
+                maxDrawdown: statsData.max_drawdown ?? 0,
+                maxDdDuration: statsData.max_dd_duration ?? 0,
+                winRate: statsData.win_rate ?? 0,
+                totalTrades: statsData.total_trades ?? 0,
+                sharpeRatio: statsData.sharpe_ratio ?? 0,
+                sortinoRatio: statsData.sortino_ratio ?? 0,
+                calmarRatio: statsData.calmar_ratio ?? 0,
+                cagr: statsData.cagr ?? 0,
+                profitFactor: statsData.profit_factor ?? 0,
+                expectancy: statsData.expectancy ?? 0,
+                avgWin: statsData.avg_win ?? 0,
+                avgLoss: statsData.avg_loss ?? 0,
                 brokeragePaid: estBrokerage
             });
 
-            // Map the engine's explicit EquityCurve payload
             if (statsData.equity_curve && Array.isArray(statsData.equity_curve)) {
                 const engineCurve = statsData.equity_curve.map((pt: { time: string, equity: number }) => ({
                     time: new Date(pt.time).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
                     equity: pt.equity
                 }));
-                // Ensure at least 2 points to avoid rendering stalls
                 if (engineCurve.length > 0) {
                     if (engineCurve.length === 1) engineCurve.push({ time: 'End', equity: engineCurve[0].equity });
                     setEquityCurve(engineCurve);
@@ -129,180 +143,313 @@ export default function BacktestResultPage() {
                 }
             }
         } else {
-            // Fallback purely on frontend calculation if stats missing
             const netProfit = currentEquity - initialCash;
             const totalReturn = (netProfit / initialCash) * 100;
             const wins = tradesData.filter(t => t.pnl > 0).length;
-            const winRate = tradesData.filter(t => t.pnl !== 0).length > 0
-                ? (wins / tradesData.filter(t => t.pnl !== 0).length) * 100
-                : 0;
+            const tradesWithPnl = tradesData.filter(t => t.pnl !== 0).length;
+            const winRate = tradesWithPnl > 0 ? (wins / tradesWithPnl) * 100 : 0;
 
             setStats({
                 netProfit,
                 totalReturn,
                 maxDrawdown: 0,
+                maxDdDuration: 0,
                 winRate,
                 totalTrades: tradesData.length,
                 sharpeRatio: 0,
+                sortinoRatio: 0,
+                calmarRatio: 0,
+                cagr: 0,
+                profitFactor: 0,
+                expectancy: 0,
+                avgWin: 0,
+                avgLoss: 0,
                 brokeragePaid: estBrokerage
             });
         }
 
-        // Final fallback to make sure 1-point charts don't break Recharts rendering
         if (curve.length === 1) curve.push({ time: 'End', equity: currentEquity });
         setEquityCurve(curve);
     };
 
     if (loading) {
         return (
-            <div className="flex h-screen items-center justify-center">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                <span className="ml-2">Loading Backtest Results...</span>
+            <div className="flex h-screen items-center justify-center bg-[#0a0a0b]">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                <span className="ml-3 text-slate-400">Loading Backtest Results...</span>
             </div>
         );
     }
 
+    const formatCurrency = (v: number) => `₹${Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+    const formatPct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+
     return (
-        <div className="min-h-screen bg-background p-6 space-y-6">
+        <div className="min-h-screen bg-[#0a0a0b] text-slate-200 p-4 md:p-6 space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
                     <Link href="/ide">
-                        <Button variant="outline" size="icon">
+                        <Button variant="outline" size="icon" className="bg-slate-800/50 border-slate-700 hover:bg-slate-700 text-slate-300">
                             <ArrowLeft className="h-4 w-4" />
                         </Button>
                     </Link>
                     <div>
-                        <h1 className="text-2xl font-bold tracking-tight">Backtest Results</h1>
-                        <p className="text-muted-foreground text-sm font-mono">{runId}</p>
+                        <h1 className="text-2xl font-bold tracking-tight text-white">Backtest Results</h1>
+                        <p className="text-slate-500 text-xs font-mono mt-0.5">{runId}</p>
                     </div>
                 </div>
-                <div>
-                    {/* Export / Share Actions could go here */}
-                </div>
+                <Badge variant="outline" className={`text-sm px-3 py-1.5 ${stats && stats.netProfit >= 0
+                    ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'
+                    : 'border-red-500/40 text-red-400 bg-red-500/10'
+                    }`}>
+                    {stats ? formatPct(stats.totalReturn) : '—'}
+                </Badge>
             </div>
 
-            {/* Stats Cards */}
             {stats && (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
-                            <CardTitle className="text-sm font-medium truncate">Net Profit</CardTitle>
-                            <IndianRupee className="h-4 w-4 text-muted-foreground shrink-0" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className={`text-2xl font-bold ${stats.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
-                                {stats.netProfit >= 0 ? "+" : "-"}₹{Math.abs(stats.netProfit).toFixed(2)}
+                <>
+                    {/* ── Row 1: Primary Performance Cards ── */}
+                    <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+                        {/* Net Profit */}
+                        <Card className="bg-[#111113] border-slate-800/60">
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5 gap-2">
+                                <CardTitle className="text-xs font-medium text-slate-400 truncate">Net Profit</CardTitle>
+                                <IndianRupee className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className={`text-xl md:text-2xl font-bold ${stats.netProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                    {stats.netProfit >= 0 ? "+" : "-"}{formatCurrency(stats.netProfit)}
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-0.5">{formatPct(stats.totalReturn)} Return</p>
+                            </CardContent>
+                        </Card>
+
+                        {/* Sharpe Ratio */}
+                        <Card className="bg-[#111113] border-slate-800/60">
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5 gap-2">
+                                <CardTitle className="text-xs font-medium text-slate-400 truncate">Sharpe Ratio</CardTitle>
+                                <TrendingUp className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className={`text-xl md:text-2xl font-bold ${stats.sharpeRatio >= 1 ? "text-emerald-400" : stats.sharpeRatio >= 0 ? "text-yellow-400" : "text-red-400"}`}>
+                                    {stats.sharpeRatio.toFixed(2)}
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-0.5">
+                                    {stats.sharpeRatio >= 2 ? "Excellent" : stats.sharpeRatio >= 1 ? "Good" : stats.sharpeRatio > 0 ? "Below Avg" : "Negative"}
+                                </p>
+                            </CardContent>
+                        </Card>
+
+                        {/* Max Drawdown */}
+                        <Card className="bg-[#111113] border-slate-800/60">
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5 gap-2">
+                                <CardTitle className="text-xs font-medium text-slate-400 truncate">Max Drawdown</CardTitle>
+                                <TrendingDown className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-xl md:text-2xl font-bold text-red-400">
+                                    {stats.maxDrawdown !== 0 ? `${stats.maxDrawdown.toFixed(2)}%` : '0.00%'}
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-0.5">
+                                    {stats.maxDdDuration > 0 ? `${stats.maxDdDuration} day recovery` : '—'}
+                                </p>
+                            </CardContent>
+                        </Card>
+
+                        {/* Win Rate */}
+                        <Card className="bg-[#111113] border-slate-800/60">
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5 gap-2">
+                                <CardTitle className="text-xs font-medium text-slate-400 truncate">Win Rate</CardTitle>
+                                <Target className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className={`text-xl md:text-2xl font-bold ${stats.winRate >= 50 ? "text-emerald-400" : "text-yellow-400"}`}>
+                                    {stats.winRate.toFixed(1)}%
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-0.5">{stats.totalTrades} trades</p>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* ── Row 2: Extended Metrics (two rows on mobile, one on desktop) ── */}
+                    <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+                        {/* Sortino */}
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider">Sortino</span>
+                                <Scale className="h-3 w-3 text-slate-600" />
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                                {stats.totalReturn > 0 ? "+" : ""}{stats.totalReturn.toFixed(2)}% Return
-                            </p>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
-                            <CardTitle className="text-sm font-medium truncate">Current Capital</CardTitle>
-                            <IndianRupee className="h-4 w-4 text-muted-foreground shrink-0" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">₹{(100000 + stats.netProfit).toFixed(2)}</div>
-                            <p className="text-xs text-muted-foreground">
-                                Starting: ₹100,000
-                            </p>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
-                            <CardTitle className="text-sm font-medium truncate">Max Drawdown</CardTitle>
-                            <Activity className="h-4 w-4 text-muted-foreground shrink-0" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold text-red-500">
-                                {stats.maxDrawdown > 0 ? `-${stats.maxDrawdown.toFixed(2)}%` : '0.00%'}
+                            <div className={`text-lg font-bold ${stats.sortinoRatio >= 1 ? "text-emerald-400" : stats.sortinoRatio >= 0 ? "text-yellow-400" : "text-red-400"}`}>
+                                {stats.sortinoRatio.toFixed(2)}
                             </div>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
-                            <CardTitle className="text-sm font-medium truncate">Sharpe Ratio</CardTitle>
-                            <TrendingUp className="h-4 w-4 text-muted-foreground shrink-0" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{stats.sharpeRatio.toFixed(2)}</div>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 gap-2">
-                            <CardTitle className="text-sm font-medium truncate">Estimated Brokerage</CardTitle>
-                            <IndianRupee className="h-4 w-4 text-muted-foreground shrink-0" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold text-yellow-500">
+                        </div>
+
+                        {/* CAGR */}
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider">CAGR</span>
+                                <Percent className="h-3 w-3 text-slate-600" />
+                            </div>
+                            <div className={`text-lg font-bold ${stats.cagr >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                {stats.cagr.toFixed(2)}%
+                            </div>
+                        </div>
+
+                        {/* Calmar */}
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider">Calmar</span>
+                                <BarChart3 className="h-3 w-3 text-slate-600" />
+                            </div>
+                            <div className={`text-lg font-bold ${stats.calmarRatio >= 1 ? "text-emerald-400" : "text-yellow-400"}`}>
+                                {stats.calmarRatio.toFixed(2)}
+                            </div>
+                        </div>
+
+                        {/* Profit Factor */}
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider">Profit Factor</span>
+                                <Activity className="h-3 w-3 text-slate-600" />
+                            </div>
+                            <div className={`text-lg font-bold ${stats.profitFactor >= 1 ? "text-emerald-400" : "text-red-400"}`}>
+                                {stats.profitFactor.toFixed(2)}
+                            </div>
+                        </div>
+
+                        {/* Expectancy */}
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider">Expectancy</span>
+                                <Zap className="h-3 w-3 text-slate-600" />
+                            </div>
+                            <div className={`text-lg font-bold ${stats.expectancy >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                ₹{stats.expectancy.toFixed(2)}
+                            </div>
+                        </div>
+
+                        {/* Brokerage */}
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider">Brokerage</span>
+                                <IndianRupee className="h-3 w-3 text-slate-600" />
+                            </div>
+                            <div className="text-lg font-bold text-amber-400">
                                 ₹{stats.brokeragePaid.toFixed(2)}
                             </div>
-                        </CardContent>
-                    </Card>
-                </div>
+                        </div>
+                    </div>
+
+                    {/* ── Row 3: Avg Win/Loss inline ── */}
+                    <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3 flex items-center justify-between">
+                            <div>
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider block mb-0.5">Avg Win</span>
+                                <span className="text-base font-bold text-emerald-400">₹{stats.avgWin.toFixed(2)}</span>
+                            </div>
+                            <TrendingUp className="h-4 w-4 text-emerald-500/40" />
+                        </div>
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3 flex items-center justify-between">
+                            <div>
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider block mb-0.5">Avg Loss</span>
+                                <span className="text-base font-bold text-red-400">₹{Math.abs(stats.avgLoss).toFixed(2)}</span>
+                            </div>
+                            <TrendingDown className="h-4 w-4 text-red-500/40" />
+                        </div>
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3 flex items-center justify-between">
+                            <div>
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider block mb-0.5">Current Capital</span>
+                                <span className="text-base font-bold text-white">{formatCurrency(100000 + stats.netProfit)}</span>
+                            </div>
+                            <IndianRupee className="h-4 w-4 text-slate-600" />
+                        </div>
+                        <div className="bg-[#111113] border border-slate-800/60 rounded-lg p-3 flex items-center justify-between">
+                            <div>
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wider block mb-0.5">Total Trades</span>
+                                <span className="text-base font-bold text-white">{stats.totalTrades}</span>
+                            </div>
+                            <Clock className="h-4 w-4 text-slate-600" />
+                        </div>
+                    </div>
+                </>
             )}
 
-            {/* Scanner & Volume Visuals */}
+            {/* Scanner & Volume */}
             <ScannerResults runId={runId} />
 
             {/* Equity Curve */}
-            <Card>
+            <Card className="bg-[#111113] border-slate-800/60">
                 <CardHeader>
-                    <CardTitle>Equity Curve</CardTitle>
+                    <CardTitle className="text-white text-lg">Equity Curve</CardTitle>
                 </CardHeader>
-                <CardContent className="h-[400px]">
+                <CardContent className="h-[350px] md:h-[400px]">
                     <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={equityCurve}>
-                            <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                            <XAxis dataKey="time" minTickGap={50} />
-                            <YAxis domain={['auto', 'auto']} />
+                        <AreaChart data={equityCurve}>
+                            <defs>
+                                <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                            <XAxis dataKey="time" minTickGap={50} tick={{ fill: '#64748b', fontSize: 10 }} />
+                            <YAxis domain={['auto', 'auto']} tick={{ fill: '#64748b', fontSize: 10 }} />
                             <Tooltip
-                                contentStyle={{ backgroundColor: '#111', border: '1px solid #333' }}
+                                contentStyle={{ backgroundColor: '#111', border: '1px solid #333', borderRadius: '8px' }}
                                 itemStyle={{ color: '#fff' }}
+                                formatter={(value: number | string | undefined) => {
+                                    const num = typeof value === 'number' ? value : 0;
+                                    return [`₹${num.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, 'Equity'];
+                                }}
                             />
-                            <Line
+                            <Area
                                 type="monotone"
                                 dataKey="equity"
                                 stroke="#22c55e"
                                 strokeWidth={2}
+                                fill="url(#equityGrad)"
                                 dot={false}
                             />
-                        </LineChart>
+                        </AreaChart>
                     </ResponsiveContainer>
                 </CardContent>
             </Card>
 
             {/* Trades Table */}
-            <Card>
+            <Card className="bg-[#111113] border-slate-800/60">
                 <CardHeader>
-                    <CardTitle>Executed Trades</CardTitle>
+                    <CardTitle className="text-white text-lg">Executed Trades</CardTitle>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="overflow-x-auto">
                     <Table>
                         <TableHeader>
-                            <TableRow>
-                                <TableHead>Time</TableHead>
-                                <TableHead>Stock</TableHead>
-                                <TableHead>Side</TableHead>
-                                <TableHead>Quantity</TableHead>
-                                <TableHead>Price</TableHead>
-                                <TableHead>PnL</TableHead>
+                            <TableRow className="border-slate-800">
+                                <TableHead className="text-slate-400">Time</TableHead>
+                                <TableHead className="text-slate-400">Stock</TableHead>
+                                <TableHead className="text-slate-400">Side</TableHead>
+                                <TableHead className="text-slate-400">Quantity</TableHead>
+                                <TableHead className="text-slate-400">Price</TableHead>
+                                <TableHead className="text-slate-400">PnL</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {trades.slice().reverse().map((trade, i) => (
-                                <TableRow key={i}>
-                                    <TableCell className="font-mono text-xs">{new Date(trade.time).toLocaleString()}</TableCell>
-                                    <TableCell>{trade.name !== trade.symbol ? trade.name : trade.symbol}</TableCell>
+                                <TableRow key={i} className="border-slate-800/40 hover:bg-slate-800/20">
+                                    <TableCell className="font-mono text-xs text-slate-300">{new Date(trade.time).toLocaleString()}</TableCell>
+                                    <TableCell className="text-slate-200">{trade.name !== trade.symbol ? trade.name : trade.symbol}</TableCell>
                                     <TableCell>
-                                        <Badge variant={trade.side === 'BUY' ? 'default' : 'destructive'}>{trade.side}</Badge>
+                                        <Badge variant={trade.side === 'BUY' ? 'default' : 'destructive'}
+                                            className={trade.side === 'BUY'
+                                                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                                : 'bg-red-500/20 text-red-400 border-red-500/30'
+                                            }>
+                                            {trade.side}
+                                        </Badge>
                                     </TableCell>
-                                    <TableCell>{trade.quantity}</TableCell>
-                                    <TableCell>₹{trade.price.toFixed(2)}</TableCell>
-                                    <TableCell className={trade.pnl > 0 ? "text-green-500 font-bold" : trade.pnl < 0 ? "text-red-500 font-bold" : ""}>
+                                    <TableCell className="text-slate-300">{trade.quantity}</TableCell>
+                                    <TableCell className="text-slate-300">₹{trade.price.toFixed(2)}</TableCell>
+                                    <TableCell className={trade.pnl > 0 ? "text-emerald-400 font-bold" : trade.pnl < 0 ? "text-red-400 font-bold" : "text-slate-500"}>
                                         {trade.pnl !== 0 ? `₹${trade.pnl.toFixed(2)}` : '-'}
                                     </TableCell>
                                 </TableRow>

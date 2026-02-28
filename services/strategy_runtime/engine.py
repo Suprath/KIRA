@@ -4,6 +4,8 @@ import logging
 import importlib
 import time
 from datetime import datetime, timezone, timedelta
+import calculations
+import timesync
 from confluent_kafka import Consumer
 from quant_sdk.data import Tick, Slice
 from quant_sdk.algorithm import Resolution
@@ -124,32 +126,16 @@ class AlgorithmEngine:
         self.LocalData = ticks
         logger.info(f"📁 Loaded {len(ticks)} ticks for Local Backtest")
 
-    # Indian Standard Time offset
-    IST = timezone(timedelta(hours=5, minutes=30))
+    # Indian Standard Time offset — delegate to timesync module
+    IST = timesync.IST
 
     def _to_ist(self, time_obj):
-        """Convert a datetime to IST for market hours checks.
-        
-        In BACKTEST mode: QuestDB timestamps are already in IST, so treat
-        naive datetimes as IST directly (no UTC→IST shift).
-        In LIVE mode: Docker containers run UTC, so convert UTC→IST.
-        """
-        if time_obj.tzinfo is None:
-            if self.BacktestMode:
-                # Backtest: timestamps from QuestDB are already IST
-                return time_obj.replace(tzinfo=self.IST)
-            else:
-                # Live: Docker runs UTC, convert to IST
-                return time_obj.replace(tzinfo=timezone.utc).astimezone(self.IST)
-        return time_obj.astimezone(self.IST)
+        """Convert a datetime to IST. Delegates to timesync module."""
+        return timesync.to_ist(time_obj, backtest_mode=self.BacktestMode)
 
     def _is_market_hours(self, time_obj):
         """Check if current time is within NSE trading hours (9:15 AM - 3:30 PM IST)."""
-        ist = self._to_ist(time_obj)
-        h, m = ist.hour, ist.minute
-        market_open = h > self.MARKET_OPEN_HOUR or (h == self.MARKET_OPEN_HOUR and m >= self.MARKET_OPEN_MINUTE)
-        market_close = h < 15 or (h == 15 and m <= 30)
-        return market_open and market_close
+        return timesync.is_market_open(time_obj, backtest_mode=self.BacktestMode)
 
 
     def ProcessTick(self, tick_dict):
@@ -245,28 +231,22 @@ class AlgorithmEngine:
     def CalculatePortfolioValue(self):
         """
         Calculate Total Portfolio Value (Equity) in Realtime.
-        Equity = Cash + Sum(Position Value).
+        Delegates to calculations module.
         """
         cash = self.Algorithm.Portfolio.get('Cash', 0.0)
-        equity = cash
-        
-        for sym, holding in self.Algorithm.Portfolio.items():
-            if sym in ('Cash', 'TotalPortfolioValue'): continue
-            if isinstance(holding, SecurityHolding) and holding.Invested:
-                # Use current slice price if available, else last known
-                price = None
-                if self.CurrentSlice and self.CurrentSlice.ContainsKey(sym):
-                    price = self.CurrentSlice[sym].Price
-                
-                if not price:
-                    price = self._last_prices.get(sym)
-                
-                if not price:
-                     price = holding.AveragePrice
-                
-                market_value = holding.Quantity * price
-                equity += market_value
-                
+
+        # Build price map from current slice + cached prices
+        price_map = dict(self._last_prices)
+        if self.CurrentSlice:
+            for sym in list(self.Algorithm.Portfolio.keys()):
+                if sym in ('Cash', 'TotalPortfolioValue'):
+                    continue
+                if self.CurrentSlice.ContainsKey(sym):
+                    price_map[sym] = self.CurrentSlice[sym].Price
+
+        equity = calculations.compute_portfolio_value(
+            cash, self.Algorithm.Portfolio, price_map
+        )
         self.Algorithm.Portfolio['TotalPortfolioValue'] = equity
         return equity
 
@@ -424,123 +404,67 @@ class AlgorithmEngine:
         logger.info(f"⏱️ Scanner frequency set to every {self.ScannerFrequency} minutes")
 
     def CalculateStatistics(self):
-        """Calculate Sharpe Ratio, Drawdown, etc."""
+        """Calculate all statistics. Delegates to calculations module."""
         import pandas as pd
-        import numpy as np
 
-        stats = {
-            "total_return": 0.0,
-            "sharpe_ratio": 0.0,
-            "max_drawdown": 0.0,
-            "win_rate": 0.0,
-            "total_trades": 0,
-            "profit_factor": 0.0,
-            "net_profit": 0.0
-        }
+        # Baseline capital
+        initial_cap = getattr(self, 'InitialCapital', self.Algorithm.Portfolio.get('Cash', 100000.0))
+        if initial_cap <= 0:
+            initial_cap = 100000.0
 
-        # 1. Equity Curve Stats
-        # Baseline capital for stats: Try Algorithm first (SetCash), then SetInitialCapital, then default
-        initial_cap = self.Algorithm.Portfolio.get('Cash', getattr(self, 'InitialCapital', 100000.0))
-        if initial_cap <= 0: initial_cap = 100000.0
+        # ── ALWAYS reconstruct equity curve from trade history ──
+        # The in-memory EquityCurve only has sparse day-rollover snapshots.
+        # For accurate Sharpe/Sortino we need one data point per trade.
+        equity_curve = []
+        pnl_list = []
 
-        if len(self.EquityCurve) <= 1:
-             logger.warning("⚠️ Equity Curve insufficient! Attempting to reconstruct from Trade History.")
-             try:
-                 conn = self.Exchange._get_conn()
-                 cur = conn.cursor()
-                 table = "backtest_orders" if self.BacktestMode else "orders"
-                 cur.execute(f"SELECT timestamp, pnl FROM {table} WHERE run_id=%s AND pnl IS NOT NULL ORDER BY timestamp ASC", (self.RunID,))
-                 rows = cur.fetchall()
-                 
-                 reconstructed_curve = []
-                 current_equity = initial_cap
-                 
-                 from datetime import timedelta, datetime
-                 if rows:
-                     # Start point
-                     reconstructed_curve.append({'timestamp': rows[0][0] - timedelta(minutes=1), 'equity': initial_cap})
-                     for r in rows:
-                         current_equity += float(r[1])
-                         reconstructed_curve.append({'timestamp': r[0], 'equity': current_equity})
-                 else:
-                     reconstructed_curve.append({'timestamp': datetime.now(), 'equity': initial_cap})
-                 
-                 df = pd.DataFrame(reconstructed_curve)
-             except Exception as e:
-                 logger.error(f"Failed reconstruction: {e}")
-                 df = pd.DataFrame([{'timestamp': datetime.now(), 'equity': initial_cap}])
-        else:
-             df = pd.DataFrame(self.EquityCurve)
-
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
-        df['equity'] = pd.to_numeric(df['equity'])
-        
-        # Resample to Daily
-        daily_df = df.resample('D').last().ffill()
-        
-        # TRICK: To include the very first day's return, we prepend the starting capital
-        # as if it were the "closing" value of the day before the backtest started.
-        start_date = daily_df.index.min()
-        day_before = start_date - pd.Timedelta(days=1)
-        
-        baseline_df = pd.DataFrame({'equity': [initial_cap]}, index=[day_before])
-        full_df = pd.concat([baseline_df, daily_df])
-        
-        full_df['returns'] = full_df['equity'].pct_change().dropna()
-        
-        final_equity = full_df['equity'].iloc[-1]
-        
-        stats['net_profit'] = float(final_equity - initial_cap)
-        stats['total_return'] = float(((final_equity - initial_cap) / initial_cap) * 100) if initial_cap > 0 else 0
-
-        # Sharpe Ratio (Daily)
-        # We need more than just one or two days for a safe std dev
-        if len(full_df['returns']) > 2:
-            risk_free_daily = 0.06 / 252
-            excess_returns = full_df['returns'] - risk_free_daily
-            std_dev = excess_returns.std()
-            if std_dev > 0.00001: # Avoid division by near-zero std dev
-                sharpe = (excess_returns.mean() / std_dev) * (252 ** 0.5)
-                # Cap Sharpe at a reasonable range to avoid display anomalies on small samples
-                stats['sharpe_ratio'] = float(round(max(-10, min(10, sharpe)), 2))
-            else:
-                stats['sharpe_ratio'] = 0.0
-        else:
-            stats['sharpe_ratio'] = 0.0
-
-        # Max Drawdown
-        if not full_df.empty:
-            rolling_max = full_df['equity'].cummax()
-            drawdown = (full_df['equity'] - rolling_max) / rolling_max
-            stats['max_drawdown'] = float(round(drawdown.min() * 100, 2)) if not drawdown.empty else 0.0
-
-        # 2. Trade Stats from DB
         try:
             conn = self.Exchange._get_conn()
             cur = conn.cursor()
             table = "backtest_orders" if self.BacktestMode else "orders"
-            # Fetch only CLOSED trades (with PnL)
-            cur.execute(f"SELECT pnl FROM {table} WHERE run_id=%s AND pnl IS NOT NULL", (self.RunID,))
+
+            # Fetch ALL trades (BUY + SELL) ordered chronologically
+            cur.execute(
+                f"SELECT timestamp, pnl FROM {table} WHERE run_id=%s ORDER BY timestamp ASC",
+                (self.RunID,),
+            )
             rows = cur.fetchall()
-            pnls = [float(r[0]) for r in rows]
-            
-            stats['total_trades'] = len(pnls)
-            if pnls:
-                wins = [p for p in pnls if p > 0]
-                losses = [p for p in pnls if p <= 0]
-                stats['win_rate'] = round((len(wins) / len(pnls)) * 100, 1)
-                
-                gross_loss = abs(sum(losses))
-                if gross_loss > 0:
-                    stats['profit_factor'] = round(sum(wins) / gross_loss, 2)
-                else:
-                    stats['profit_factor'] = 99.99 if sum(wins) > 0 else 0
-            
+
+            # Build equity curve from cumulative PnL
+            current_equity = initial_cap
+            if rows:
+                # Inject baseline point just before the first trade
+                equity_curve.append({
+                    'timestamp': rows[0][0] - timedelta(seconds=1),
+                    'equity': initial_cap
+                })
+                for ts, pnl_val in rows:
+                    trade_pnl = float(pnl_val) if pnl_val is not None else 0.0
+                    current_equity += trade_pnl
+                    equity_curve.append({'timestamp': ts, 'equity': current_equity})
+
+                    # Collect non-zero PnLs for trade-level metrics
+                    if pnl_val is not None and trade_pnl != 0.0:
+                        pnl_list.append(trade_pnl)
+            else:
+                equity_curve.append({'timestamp': datetime.now(), 'equity': initial_cap})
+
             conn.close()
         except Exception as e:
-            logger.error(f"Failed to calc trade stats: {e}")
+            logger.error(f"Failed to reconstruct equity curve: {e}")
+            # Fallback to sparse in-memory curve
+            equity_curve = list(self.EquityCurve) if self.EquityCurve else [
+                {'timestamp': datetime.now(), 'equity': initial_cap}
+            ]
 
+        logger.info(f"📈 Equity curve: {len(equity_curve)} points, PnL trades: {len(pnl_list)}")
+
+        # Delegate to the calculations module
+        stats = calculations.compute_all_statistics(
+            equity_curve=equity_curve,
+            pnl_list=pnl_list,
+            initial_capital=initial_cap,
+        )
         return stats
 
     def SaveStatistics(self):

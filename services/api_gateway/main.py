@@ -524,19 +524,68 @@ def get_backtest_trades(run_id: str, conn = Depends(get_pg_conn)):
 
 @app.get("/api/v1/backtest/stats/{run_id}")
 def get_backtest_stats(run_id: str, conn = Depends(get_pg_conn)):
-    """Fetch computed backtest statistics"""
+    """Fetch computed backtest statistics, with fallback computation from trades."""
     try:
         cur = conn.cursor()
+        # Try the precomputed stats first
         cur.execute("""
             SELECT stats_json FROM backtest_results WHERE run_id = %s;
         """, (run_id,))
         row = cur.fetchone()
-        if row:
-            return row[0] # Return the JSON directly
-        return {} # Empty if not ready
+        if row and row[0]:
+            stats = row[0]
+            # Sanity check: if sharpe_ratio is present and non-default, return it
+            if stats.get('sharpe_ratio') is not None:
+                return stats
+
+        # ── Fallback: compute stats from trade data directly ──
+        cur.execute("""
+            SELECT pnl FROM backtest_orders
+            WHERE run_id = %s AND pnl IS NOT NULL
+            ORDER BY timestamp ASC;
+        """, (run_id,))
+        pnl_rows = cur.fetchall()
+
+        if not pnl_rows:
+            return {}
+
+        pnl_list = [float(r[0]) for r in pnl_rows if r[0] is not None and float(r[0]) != 0.0]
+        all_pnls = [float(r[0]) for r in pnl_rows if r[0] is not None]
+
+        if not pnl_list:
+            return {}
+
+        total_trades = len(pnl_list)
+        wins = [p for p in pnl_list if p > 0]
+        losses = [p for p in pnl_list if p < 0]
+        gross_profit = sum(wins) if wins else 0
+        gross_loss = abs(sum(losses)) if losses else 0
+        net_profit = sum(pnl_list)
+
+        win_rate = round((len(wins) / total_trades) * 100, 1) if total_trades > 0 else 0
+        profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0.01 else (99.99 if gross_profit > 0 else 0)
+        expectancy = round(net_profit / total_trades, 2) if total_trades > 0 else 0
+        avg_win = round(gross_profit / len(wins), 2) if wins else 0
+        avg_loss = round(-abs(sum(losses)) / len(losses), 2) if losses else 0
+        total_return = round((net_profit / 100000) * 100, 2)
+
+        return {
+            "total_return": total_return,
+            "net_profit": round(net_profit, 2),
+            "cagr": 0.0,
+            "sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "max_dd_duration": 0,
+            "calmar_ratio": 0.0,
+            "total_trades": total_trades,
+            "win_rate": win_rate,
+            "profit_factor": profit_factor,
+            "expectancy": expectancy,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+        }
     except Exception as e:
-        # Table might not exist yet if no backtest ran since update
-        # logger.warning(f"Stats fetch error: {e}")
         return {}
 
 @app.get("/api/v1/backtest/universe/{run_id}")

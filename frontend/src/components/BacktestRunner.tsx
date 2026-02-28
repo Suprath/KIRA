@@ -271,8 +271,8 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
             </DialogTrigger>
             <DialogContent className="max-w-[95vw] h-[95vh] bg-[#0a0a0b] border-slate-800 p-0 flex flex-col overflow-hidden text-slate-300 shadow-2xl">
                 {/* Header Control Bar */}
-                <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between border-b border-slate-800 bg-[#111113] p-4 shadow-md z-10 box-border shrink-0 min-h-[5rem] gap-4">
-                    <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full xl:w-auto">
+                <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between border-b border-slate-800 bg-[#111113] p-4 shadow-md z-10 box-border shrink-0 gap-4 flex-wrap">
+                    <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full lg:w-auto flex-wrap">
                         <div className="flex items-center gap-3 border-b md:border-b-0 md:border-r border-slate-700 pb-3 md:pb-0 pr-5 w-full md:w-auto shrink-0">
                             <Activity className="h-6 w-6 text-purple-500" />
                             <div>
@@ -334,19 +334,19 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                                 )}
                             </div>
 
-                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800">
+                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800 shrink-0">
                                 <Clock className="h-4 w-4 text-slate-500" />
                                 <Input type="date" value={config.startDate} onChange={e => setConfig({ ...config, startDate: e.target.value })} className="h-7 w-[125px] bg-transparent border-none focus-visible:ring-0 px-0 text-sm font-mono text-white" />
                                 <span className="text-slate-600">→</span>
                                 <Input type="date" value={config.endDate} onChange={e => setConfig({ ...config, endDate: e.target.value })} className="h-7 w-[125px] bg-transparent border-none focus-visible:ring-0 px-0 text-sm font-mono text-white" />
                             </div>
 
-                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800">
+                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800 shrink-0">
                                 <DollarSign className="h-4 w-4 text-slate-500" />
                                 <Input type="number" value={config.cash} onChange={e => setConfig({ ...config, cash: parseInt(e.target.value) })} className="h-7 w-[100px] bg-transparent border-none focus-visible:ring-0 px-0 text-sm font-mono text-white hide-arrows" />
                             </div>
 
-                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800">
+                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800 shrink-0">
                                 <Settings2 className="h-4 w-4 text-slate-500" />
                                 <Select value={config.speed} onValueChange={v => setConfig({ ...config, speed: v })}>
                                     <SelectTrigger className="h-7 w-[100px] bg-transparent border-none focus:ring-0 text-white font-mono text-sm px-0">
@@ -360,7 +360,7 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                                 </Select>
                             </div>
 
-                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800">
+                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800 shrink-0">
                                 <Target className="h-4 w-4 text-slate-500" />
                                 <Select value={config.tradingMode} onValueChange={v => setConfig({ ...config, tradingMode: v })}>
                                     <SelectTrigger className="h-7 w-[100px] bg-transparent border-none focus:ring-0 text-white font-mono text-sm px-0">
@@ -375,19 +375,19 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3 w-full xl:w-auto justify-end">
+                    <div className="flex items-center gap-3 w-full lg:w-auto lg:justify-end mt-2 lg:mt-0">
                         {isLoading ? (
-                            <Button onClick={stopBacktest} variant="destructive" className="h-10 px-6 font-semibold shadow-[0_0_15px_rgba(239,68,68,0.4)]">
+                            <Button onClick={stopBacktest} variant="destructive" className="h-10 px-6 font-semibold shadow-[0_0_15px_rgba(239,68,68,0.4)] shrink-0">
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" /> HALT EXECUTION
                             </Button>
                         ) : (
-                            <Button onClick={runBacktest} className="h-10 px-8 bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)] transition-all font-semibold uppercase tracking-wider">
+                            <Button onClick={runBacktest} className="h-10 px-8 bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)] transition-all font-semibold uppercase tracking-wider shrink-0">
                                 <Play className="mr-2 h-4 w-4 fill-current" /> Initialize Run
                             </Button>
                         )}
                         {/* Always visible when complete to draw attention, and with high contrast styling */}
                         {isComplete && lastRunId && (
-                            <Link href={`/dashboard/backtest/${lastRunId}`} target="_blank">
+                            <Link href={`/dashboard/backtest/${lastRunId}`} target="_blank" className="shrink-0">
                                 <Button className="h-10 bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_20px_rgba(79,70,229,0.5)] transition-all font-bold tracking-wide animate-pulse">
                                     <TrendingUp className="mr-2 h-4 w-4" /> Full Dashboard
                                 </Button>

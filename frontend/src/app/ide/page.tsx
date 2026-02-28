@@ -84,10 +84,19 @@ class DemoStrategy(QCAlgorithm):
 from .indicators_helper import BollingerBands
 
 class MeanReversion(QCAlgorithm):
+    """
+    Optimized Mean Reversion Strategy
+    - Wider Bollinger Bands (2.5σ) to filter noise
+    - Longer lookback (50 ticks) for smoother signals
+    - Trade cooldown to prevent overtrading
+    - Only enters on strong reversals
+    """
     def Initialize(self):
         self.SetCash(100000)
         self.AddUniverse(self.SelectUniverse)
         self.bands = {}
+        self.cooldowns = {}      # Per-symbol cooldown counter
+        self.COOLDOWN_TICKS = 20 # Min ticks between trades per symbol
 
     def SelectUniverse(self, coarse):
         return coarse
@@ -98,23 +107,39 @@ class MeanReversion(QCAlgorithm):
             price = tick.Price
 
             if symbol not in self.bands:
-                self.bands[symbol] = BollingerBands(period=20)
+                self.bands[symbol] = BollingerBands(period=50, num_std=2.5)
+            if symbol not in self.cooldowns:
+                self.cooldowns[symbol] = 0
 
             self.bands[symbol].update(price)
+
+            # Decrement cooldown
+            if self.cooldowns[symbol] > 0:
+                self.cooldowns[symbol] -= 1
+                continue
 
             if not self.bands[symbol].ready:
                 continue
 
             upper, lower, mean = self.bands[symbol].values()
+            bandwidth = upper - lower
+            if bandwidth < 0.01:
+                continue  # Skip if bands are too tight (low volatility)
+
             holding = self.Portfolio.get(symbol)
             qty = holding.Quantity if holding else 0
 
+            # BUY: Price dropped significantly below lower band
             if price < lower and qty <= 0:
-                self.SetHoldings(symbol, 0.1)
+                self.SetHoldings(symbol, 0.15)
+                self.cooldowns[symbol] = self.COOLDOWN_TICKS
                 self.Log(f"BUY {symbol} @ {price:.2f} (Below lower band)")
-            elif price > upper and qty > 0:
+
+            # SELL: Price rallied above mean (take profit near mean, not upper)
+            elif price > mean and qty > 0:
                 self.Liquidate(symbol)
-                self.Log(f"SELL {symbol} @ {price:.2f} (Above upper band)")
+                self.cooldowns[symbol] = self.COOLDOWN_TICKS
+                self.Log(f"SELL {symbol} @ {price:.2f} (Above mean)")
 `
             },
             {

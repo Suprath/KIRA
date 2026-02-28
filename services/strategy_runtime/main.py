@@ -433,10 +433,113 @@ def run_backtest_process(run_id: str, request: BacktestRequest, strategy_file_pa
             
         logger.info(f"✅ Backtest Job {run_id} Completed (Code: {process.returncode})")
         
+        # ── Always compute stats from DB after process ends ──
+        # The subprocess may have already called SaveStatistics, but we
+        # compute them again to be safe (upsert handles duplicates).
+        try:
+            _compute_and_save_stats(run_id)
+        except Exception as e:
+            logger.error(f"Stats computation after backtest failed: {e}")
+        
     except Exception as e:
         logger.error(f"Backtest Job Failed: {e}")
         if run_id in active_processes:
             del active_processes[run_id]
+
+
+def _compute_and_save_stats(run_id: str):
+    """
+    Compute and persist all financial statistics by reading trade data
+    directly from the database. This is independent of the engine process
+    and works whether the backtest completed naturally or was stopped.
+    """
+    import calculations
+    from datetime import timedelta
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Get initial cash from backtest_runs table if available, else default
+    initial_cap = 100000.0
+    try:
+        cur.execute("SELECT initial_cash FROM backtest_runs WHERE run_id = %s", (run_id,))
+        row = cur.fetchone()
+        if row and row[0]:
+            initial_cap = float(row[0])
+    except:
+        pass  # Table may not exist, use default
+
+    # Fetch ALL trades chronologically
+    cur.execute(
+        "SELECT timestamp, pnl FROM backtest_orders WHERE run_id=%s ORDER BY timestamp ASC",
+        (run_id,),
+    )
+    rows = cur.fetchall()
+
+    if not rows:
+        logger.warning(f"No trades found for {run_id}, cannot compute stats.")
+        conn.close()
+        return
+
+    # Build equity curve from cumulative PnL
+    equity_curve = []
+    pnl_list = []
+    current_equity = initial_cap
+
+    equity_curve.append({
+        'timestamp': rows[0][0] - timedelta(seconds=1),
+        'equity': initial_cap
+    })
+    for ts, pnl_val in rows:
+        trade_pnl = float(pnl_val) if pnl_val is not None else 0.0
+        current_equity += trade_pnl
+        equity_curve.append({'timestamp': ts, 'equity': current_equity})
+        if pnl_val is not None and trade_pnl != 0.0:
+            pnl_list.append(trade_pnl)
+
+    logger.info(f"📈 Stats compute for {run_id}: {len(equity_curve)} equity pts, {len(pnl_list)} PnL entries")
+
+    # Compute all statistics
+    stats = calculations.compute_all_statistics(
+        equity_curve=equity_curve,
+        pnl_list=pnl_list,
+        initial_capital=initial_cap,
+    )
+
+    logger.info(f"📊 Computed: Sharpe={stats.get('sharpe_ratio')}, Sortino={stats.get('sortino_ratio')}, "
+                f"WinRate={stats.get('win_rate')}, PF={stats.get('profit_factor')}")
+
+    # Ensure table exists and upsert
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_results (
+            run_id UUID PRIMARY KEY,
+            sharpe_ratio FLOAT,
+            max_drawdown FLOAT,
+            win_rate FLOAT,
+            total_return FLOAT,
+            stats_json JSONB
+        );
+    """)
+    cur.execute("""
+        INSERT INTO backtest_results (run_id, sharpe_ratio, max_drawdown, win_rate, total_return, stats_json)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (run_id) DO UPDATE SET
+            sharpe_ratio = EXCLUDED.sharpe_ratio,
+            max_drawdown = EXCLUDED.max_drawdown,
+            win_rate = EXCLUDED.win_rate,
+            total_return = EXCLUDED.total_return,
+            stats_json = EXCLUDED.stats_json
+    """, (
+        run_id,
+        stats['sharpe_ratio'],
+        stats['max_drawdown'],
+        stats['win_rate'],
+        stats['total_return'],
+        json.dumps(stats)
+    ))
+    conn.commit()
+    conn.close()
+    logger.info(f"✅ Stats saved for {run_id}: Sharpe={stats['sharpe_ratio']}, Return={stats['total_return']}%")
 
 @app.post("/backtest")
 def start_backtest(request: BacktestRequest, background_tasks: BackgroundTasks):
@@ -492,10 +595,11 @@ def stop_backtest(run_id: str):
     if run_id in active_processes:
         try:
             process = active_processes[run_id]
-            process.terminate() # or kill()
-            # Give it a moment to terminate gracefully?
-            # process.wait(timeout=5)
-            # Remove immediately?
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except:
+                process.kill()
             del active_processes[run_id]
             logger.info(f"🛑 Stopped backtest run {run_id} by user request.")
             
@@ -504,6 +608,12 @@ def stop_backtest(run_id: str):
                 with open(f"logs/{run_id}.log", "a") as f:
                     f.write("\n🛑 Backtest Stopped by User.\n")
             except: pass
+            
+            # ── Compute and save stats from DB trade data ──
+            try:
+                _compute_and_save_stats(run_id)
+            except Exception as e:
+                logger.error(f"Failed to compute stats on stop: {e}")
             
             return {"status": "stopped", "message": f"Backtest {run_id} stopped."}
         except Exception as e:

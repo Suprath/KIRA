@@ -1,31 +1,23 @@
 import os
 import logging
 import psycopg2
+from calculations import TransactionCostCalculator
 
 logger = logging.getLogger("PaperExchange")
 
 class PaperExchange:
     """
     Indian Intraday Transaction Cost Model (NSE Equity - MIS/Intraday)
-    Realistic charges as per Indian regulations:
+    Realistic charges as per Indian regulations.
+    Delegates cost calculation to the centralized calculations module.
     """
-    # Brokerage: Flat ₹20 per order or 0.03%, whichever is lower (Zerodha model)
+    # Legacy constants kept for backward compatibility
     BROKERAGE_FLAT = 20.0
-    BROKERAGE_PCT = 0.0003  # 0.03%
-
-    # STT (Securities Transaction Tax): 0.025% on SELL side only (Intraday)
+    BROKERAGE_PCT = 0.0003
     STT_PCT = 0.00025
-
-    # Exchange Transaction Charges (NSE): 0.00345%
     EXCHANGE_TXN_PCT = 0.0000345
-
-    # SEBI Turnover Fee: 0.0001%
     SEBI_FEE_PCT = 0.000001
-
-    # Stamp Duty: 0.003% on BUY side only
     STAMP_DUTY_PCT = 0.00003
-
-    # GST: 18% on (brokerage + exchange charges)
     GST_PCT = 0.18
 
     def __init__(self, db_config, backtest_mode=False, run_id=None, trading_mode="MIS"):
@@ -34,6 +26,7 @@ class PaperExchange:
         self.run_id = run_id
         self.trading_mode = trading_mode.upper()
         self.user_id = 'default_user' # Single user for now
+        self._cost_calculator = TransactionCostCalculator(trading_mode=self.trading_mode)
 
     def _get_conn(self):
         return psycopg2.connect(**self.db_config)
@@ -41,38 +34,9 @@ class PaperExchange:
     def calculate_transaction_costs(self, turnover, side):
         """
         Calculate realistic Indian transaction costs based on trading mode.
-        side: 'BUY' or 'SELL'
-        Returns total charges as a positive number.
+        Delegates to calculations.TransactionCostCalculator.
         """
-        brokerage_flat = float(os.getenv('BROKERAGE_FLAT', self.BROKERAGE_FLAT))
-        brokerage_pct = float(os.getenv('BROKERAGE_PCT', self.BROKERAGE_PCT))
-        
-        # 1. Brokerage: min(FLAT, % of turnover) (Some brokers offer free delivery, assuming flat pricing here)
-        brokerage = min(brokerage_flat, turnover * brokerage_pct)
-
-        # 2. STT
-        if self.trading_mode == 'CNC':
-            stt = turnover * 0.001  # 0.1% on BOTH Buy and Sell for Delivery
-        else:
-            stt = turnover * self.STT_PCT if side == 'SELL' else 0.0 # 0.025% on Sell only for Intraday
-
-        # 3. Exchange Transaction Charges
-        exchange_txn = turnover * self.EXCHANGE_TXN_PCT
-
-        # 4. SEBI Turnover Fee
-        sebi_fee = turnover * self.SEBI_FEE_PCT
-
-        # 5. Stamp Duty: 0.003% for MIS, 0.015% for CNC (on BUY side only)
-        if side == 'BUY':
-            stamp_duty = turnover * (0.00015 if self.trading_mode == 'CNC' else self.STAMP_DUTY_PCT)
-        else:
-            stamp_duty = 0.0
-
-        # 6. GST: 18% on (brokerage + exchange charges + SEBI)
-        gst = (brokerage + exchange_txn + sebi_fee) * self.GST_PCT
-
-        total = brokerage + stt + exchange_txn + sebi_fee + stamp_duty + gst
-        return round(total, 2)
+        return self._cost_calculator.calculate(turnover, side)
 
     def calculate_position_size(self, price, balance):
         """

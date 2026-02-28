@@ -23,7 +23,7 @@ app = FastAPI(title="Backfiller Service")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # --- CONFIG ---
-API_BASE_URL = "https://api.upstox.com/v3/historical-candle"
+API_BASE_URL = "https://api.upstox.com/v2/historical-candle"
 ACCESS_TOKEN = os.getenv('UPSTOX_ACCESS_TOKEN')
 DELAY_BETWEEN_CHUNKS = 1.5
 DELAY_BETWEEN_STOCKS = 3.0
@@ -132,22 +132,29 @@ def ensure_schema(conn):
 # --- API Fetch ---
 async def fetch_candle_chunk(session, symbol, unit, interval, to_date, from_date):
     encoded = urllib.parse.quote(symbol)
-    url = f"{API_BASE_URL}/{encoded}/{unit}/{interval}/{to_date}/{from_date}"
+    # Upstox API V2 interval format: 'day', '1minute', '30minute'
+    api_interval = "day" if str(unit).lower() == "day" else f"{interval}minute"
+    url = f"{API_BASE_URL}/{encoded}/{api_interval}/{to_date}/{from_date}"
     headers = {'Accept': 'application/json', 'Authorization': f'Bearer {ACCESS_TOKEN}'}
     try:
         async with session.get(url, headers=headers) as response:
             if response.status == 200:
                 data = await response.json()
                 return data.get('data', {}).get('candles', [])
-            elif response.status == 401:
-                add_log("❌ Auth failed (401). Token expired?")
+            elif response.status in (401, 403):
+                add_log(f"❌ Auth failed ({response.status}). Token expired?")
                 return None
             elif response.status == 429:
                 add_log("⚠️ Rate limited! Waiting 60s...")
                 await asyncio.sleep(60)
                 return []
             else:
-                return []
+                try:
+                    error_data = await response.json()
+                    add_log(f"   ⚠️ API Error ({response.status}): {error_data}")
+                except:
+                    add_log(f"   ⚠️ API Error: {response.status}")
+                return None
     except Exception as e:
         add_log(f"   Network error: {e}")
         return []
@@ -194,11 +201,13 @@ async def run_backfill(stocks, start_str, end_str, unit, interval):
                 check_to = f"{(current_to + timedelta(days=1)).strftime('%Y-%m-%d')}T00:00:00.000000Z"
                 
                 try:
+                    timeframe_str = f"{interval}{unit[0]}"
                     query = f"""
                         SELECT count(*) FROM ohlc 
                         WHERE symbol = '{symbol}' 
-                          AND timestamp >= '{check_from}' 
-                          AND timestamp < '{check_to}'
+                          AND timeframe = '{timeframe_str}'
+                          AND timestamp >= to_timestamp('{check_from}', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ')
+                          AND timestamp < to_timestamp('{check_to}', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ')
                     """
                     cur.execute(query)
                     existing_count = cur.fetchone()[0]

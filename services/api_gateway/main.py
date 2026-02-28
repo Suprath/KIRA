@@ -713,3 +713,37 @@ def get_backfill_stocks():
         raise HTTPException(status_code=response.status_code, detail=response.text)
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=503, detail=f"Backfiller Unavailable: {e}")
+
+class EdgeScanRequest(BaseModel):
+    symbols: List[str]
+    timeframe: str = "1d"
+    start_date: str = "2020-01-01"
+    end_date: str = "2030-01-01"
+    patterns: List[str] = [
+        "gap_up_fade", 
+        "consecutive_up_days", 
+        "inside_bar_breakout", 
+        "oversold_bounce",
+        "volatility_contraction"
+    ]
+    forward_returns_bars: List[int] = [1, 3, 5]
+
+@app.post("/api/v1/edge/scan")
+def run_edge_scan(request: EdgeScanRequest):
+    """Trigger vectorized edge scan"""
+    try:
+        response = requests.post("http://edge_detector:8002/scan", json=request.dict(), timeout=30)
+        
+        if response.status_code == 200:
+            return response.json()
+            
+        res_json = response.json()
+        error_detail = res_json.get("detail", response.text)
+        
+        # Pass through the specific MISSING_DATA error if it came from the edge_detector
+        raise HTTPException(status_code=response.status_code, detail=error_detail)
+        
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="Edge Detector Timed Out. Query may be too large.")
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Edge Detector Unavailable: {e}")

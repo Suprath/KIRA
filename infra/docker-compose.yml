@@ -148,6 +148,16 @@ services:
       - ../.env
     ports:
       - "8001:8001"
+
+  edge_detector:
+    build: ../services/edge_detector
+    container_name: edge_detector
+    depends_on:
+      - questdb
+    env_file:
+      - ../.env
+    ports:
+      - "8002:8002"
     restart: always
 
   scanner:

@@ -397,9 +397,9 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                 </div>
 
                 {/* Main Content Body */}
-                <div className="flex flex-1 overflow-hidden">
+                <div className="flex flex-col xl:flex-row flex-1 overflow-hidden">
                     {/* Left Panel: Chart & Data */}
-                    <div className="flex-1 flex flex-col border-r border-slate-800 min-w-0 p-4 gap-4 overflow-y-auto custom-scrollbar">
+                    <div className="flex-1 flex flex-col xl:border-r border-b xl:border-b-0 border-slate-800 min-w-0 p-4 gap-4 overflow-y-auto custom-scrollbar">
 
                         {/* Equity Curve Chart */}
                         <div className="h-[45%] min-h-[300px] border border-slate-800 bg-[#111113] rounded-xl p-4 flex flex-col relative overflow-hidden shrink-0">

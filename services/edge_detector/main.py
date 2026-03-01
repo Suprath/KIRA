@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,9 @@ from typing import List
 import psycopg2
 from psycopg2 import pool
 from scanner import EdgeScanner
+
+logger = logging.getLogger("EdgeDetector")
+logging.basicConfig(level=logging.INFO)
 
 QUESTDB_HOST = os.getenv("QUESTDB_HOST", "questdb_tsdb")
 QUESTDB_PORT = os.getenv("QUESTDB_PORT", "8812")
@@ -30,7 +34,7 @@ async def lifespan(app: FastAPI):
             database=QUESTDB_DB
         )
         scanner = EdgeScanner(qdb_pool)
-        print("✅ Edge Detector initialized")
+        logger.info("✅ Edge Detector initialized")
         yield
     finally:
         if qdb_pool:
@@ -46,6 +50,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Request Models ──
+
 class ScanRequest(BaseModel):
     symbols: List[str]
     timeframe: str = "1d"
@@ -60,15 +66,24 @@ class ScanRequest(BaseModel):
     ]
     forward_returns_bars: List[int] = [1, 3, 5]
 
+class DeepScanRequest(BaseModel):
+    symbols: List[str]
+    timeframe: str = "1d"
+    start_date: str = "2020-01-01"
+    end_date: str = "2030-01-01"
+
+# ── Endpoints ──
+
 @app.get("/")
 def health_check():
     return {"status": "online", "service": "edge_detector"}
 
 @app.post("/scan")
 def run_edge_scan(request: ScanRequest):
+    """Legacy basic scan — 5 patterns with forward returns."""
     try:
         if not scanner:
-            raise HTTPException(status_code=503, detail="Database pool not uninitialized")
+            raise HTTPException(status_code=503, detail="Database pool not initialized")
             
         results = scanner.run_scan(
             symbols=request.symbols,
@@ -80,4 +95,33 @@ def run_edge_scan(request: ScanRequest):
         )
         return {"status": "success", "data": results}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/deep-scan")
+def run_deep_scan(request: DeepScanRequest):
+    """
+    Comprehensive deep scan — 6 analysis modules:
+    1. Regime Classification
+    2. Temporal Patterns (day-of-week, hourly, gaps)
+    3. Technical Patterns (17+ patterns with stats)
+    4. Support/Resistance & Key Levels
+    5. Volatility & Risk Profile
+    6. Behavioral Fingerprint & Trading Recommendations
+    """
+    try:
+        if not scanner:
+            raise HTTPException(status_code=503, detail="Database pool not initialized")
+
+        results = scanner.run_deep_scan(
+            symbols=request.symbols,
+            timeframe=request.timeframe,
+            start_date=request.start_date,
+            end_date=request.end_date
+        )
+        return {"status": "success", "data": results}
+    except ValueError as e:
+        # Likely MISSING_DATA — let frontend handle backfill
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Deep scan error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

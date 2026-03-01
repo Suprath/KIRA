@@ -318,21 +318,21 @@ def get_trades(limit: int = 50, conn = Depends(get_pg_conn)):
 
 
 @app.get("/api/v1/instruments/search")
-def search_instruments(query: str = Query(..., min_length=3), conn = Depends(get_pg_conn)):
-    """Search for symbols in the Instrument Master (Handy for finding Option Keys)"""
+def search_instruments(query: str = Query(..., min_length=1), conn = Depends(get_pg_conn)):
+    """Search for symbols in the Instrument Master"""
     try:
         cur = conn.cursor()
-        # Search by trading symbol or name (case-insensitive)
         search_param = f"%{query}%"
         cur.execute("""
-            SELECT instrument_token, tradingsymbol, name, exchange, lot_size 
+            SELECT instrument_token, symbol, exchange, segment
             FROM instruments 
-            WHERE tradingsymbol ILIKE %s OR name ILIKE %s 
-            LIMIT 10;
+            WHERE symbol ILIKE %s OR exchange ILIKE %s
+            ORDER BY symbol ASC
+            LIMIT 20;
         """, (search_param, search_param))
         rows = cur.fetchall()
         return [
-            {"key": r[0], "symbol": r[1], "name": r[2], "exchange": r[3], "lot_size": r[4]} 
+            {"key": r[0], "symbol": r[1], "name": r[1], "exchange": r[2], "segment": r[3]}
             for r in rows
         ]
     except Exception as e:
@@ -804,5 +804,35 @@ def run_edge_scan(request: EdgeScanRequest):
         
     except requests.exceptions.Timeout:
         raise HTTPException(status_code=504, detail="Edge Detector Timed Out. Query may be too large.")
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Edge Detector Unavailable: {e}")
+
+
+class DeepScanRequest(BaseModel):
+    symbols: List[str]
+    timeframe: str = "1d"
+    start_date: str = "2020-01-01"
+    end_date: str = "2030-01-01"
+
+
+@app.post("/api/v1/edge/deep-scan")
+def run_deep_scan(request: DeepScanRequest):
+    """Comprehensive deep scan — 6 analysis modules with insights and predictions."""
+    try:
+        response = requests.post(
+            "http://edge_detector:8002/deep-scan",
+            json=request.dict(),
+            timeout=120  # Deep analysis takes longer
+        )
+
+        if response.status_code == 200:
+            return response.json()
+
+        res_json = response.json()
+        error_detail = res_json.get("detail", response.text)
+        raise HTTPException(status_code=response.status_code, detail=error_detail)
+
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="Deep Scan Timed Out. Try a shorter date range.")
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=503, detail=f"Edge Detector Unavailable: {e}")

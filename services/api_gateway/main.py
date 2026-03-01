@@ -342,6 +342,7 @@ def search_instruments(query: str = Query(..., min_length=1), conn = Depends(get
 class LiveStartRequest(BaseModel):
     strategy_name: str
     capital: float
+    trading_mode: str = "MIS"
 
 class StrategySaveRequest(BaseModel):
     name: str

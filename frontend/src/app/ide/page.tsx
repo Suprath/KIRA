@@ -449,7 +449,7 @@ export default function IdePage() {
                     </Link>
                     <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="font-bold text-sm tracking-wide text-zinc-200">QUANT IDE</span>
+                        <span className="font-bold text-sm tracking-wide text-zinc-200">KIRA IDE</span>
                     </div>
                     <span className="text-zinc-600 text-xs hidden sm:inline">|</span>
                     <span className="text-zinc-500 text-xs hidden sm:inline font-mono">

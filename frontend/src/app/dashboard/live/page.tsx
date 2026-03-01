@@ -57,6 +57,7 @@ export default function ProfessionalLiveDashboard() {
     const [status, setStatus] = useState<LiveStatus | null>(null);
     const [strategies, setStrategies] = useState<Strategy[]>([]);
     const [selectedStrategy, setSelectedStrategy] = useState<string>("");
+    const [tradingMode, setTradingMode] = useState<string>("MIS");
     const [capital, setCapital] = useState<string>("100000");
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(false);
@@ -180,7 +181,8 @@ export default function ProfessionalLiveDashboard() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     strategy_name: selectedStrategy,
-                    capital: parseFloat(capital)
+                    capital: parseFloat(capital),
+                    trading_mode: tradingMode
                 })
             });
             const data = await res.json();
@@ -228,7 +230,7 @@ export default function ProfessionalLiveDashboard() {
         return (
             <div className="min-h-screen bg-[#0a0a0b] flex items-center justify-center flex-col gap-4 text-white">
                 <Activity className="h-10 w-10 text-blue-500 animate-spin" />
-                <h2 className="text-xl font-mono tracking-widest">INITIALIZING QUANT TERMINAL...</h2>
+                <h2 className="text-xl font-mono tracking-widest">INITIALIZING KIRA...</h2>
             </div>
         );
     }
@@ -253,7 +255,7 @@ export default function ProfessionalLiveDashboard() {
                     </Link>
                     <div className="flex items-center gap-3 border-r border-slate-700 pr-4">
                         <Activity className="h-5 w-5 text-blue-500" />
-                        <h1 className="text-lg font-bold tracking-tight text-white">Live Execution Terminal</h1>
+                        <h1 className="text-lg font-bold tracking-tight text-white">KIRA Live Execution</h1>
                         {isRunning ? (
                             <Badge className="bg-green-500/20 text-green-400 border border-green-500/50 flex items-center gap-1.5 ml-2 shadow-[0_0_10px_rgba(34,197,94,0.2)]">
                                 <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></div>
@@ -278,6 +280,18 @@ export default function ProfessionalLiveDashboard() {
                                         {strategies.map((s) => (
                                             <SelectItem key={s.value} value={s.value} className="focus:bg-blue-500/20">{s.name}</SelectItem>
                                         ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="flex items-center gap-2 bg-[#0a0a0b] px-3 py-1.5 rounded-md border border-slate-800">
+                                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Mode:</span>
+                                <Select onValueChange={setTradingMode} value={tradingMode}>
+                                    <SelectTrigger className="w-[110px] h-8 bg-transparent border-none focus:ring-0 text-white font-mono text-sm">
+                                        <SelectValue placeholder="Mode" />
+                                    </SelectTrigger>
+                                    <SelectContent className="bg-[#1a1a1e] border-slate-700 text-white">
+                                        <SelectItem value="MIS" className="focus:bg-blue-500/20">Intraday (MIS)</SelectItem>
+                                        <SelectItem value="CNC" className="focus:bg-blue-500/20">Delivery (CNC)</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>

@@ -15,8 +15,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Quant Platform",
-  description: "High-performance Quantitative Trading and Backtesting Platform",
+  title: "KIRA",
+  description: "Kinetic Intelligence for Research & Alpha - High-performance Quant Platform",
 };
 
 export default function RootLayout({

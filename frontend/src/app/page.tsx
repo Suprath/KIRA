@@ -37,7 +37,7 @@ export default function DashboardPage() {
           <div className="bg-primary p-1.5 rounded-lg text-primary-foreground shadow-sm shadow-primary/30">
             <Terminal className="h-6 w-6" />
           </div>
-          <h1 className="text-xl md:text-2xl font-bold tracking-tight bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">Antigravity Quant</h1>
+          <h1 className="text-xl md:text-2xl font-bold tracking-tight bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">KIRA</h1>
         </div>
 
         <div className="flex items-center gap-2 md:gap-4 ml-auto">
@@ -84,9 +84,9 @@ export default function DashboardPage() {
               v1.2.0 Vectorized Edge Framework Enabled
             </motion.div>
             <motion.h1 variants={fadeIn} className="text-4xl md:text-6xl font-extrabold tracking-tight leading-[1.1]">
-              Institutional-Grade <br />
+              Kinetic Intelligence for <br />
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-500 dark:from-blue-400 dark:to-cyan-300">
-                Algorithmic Research Layer
+                Research & Alpha
               </span>
             </motion.h1>
             <motion.p variants={fadeIn} className="text-lg md:text-xl text-muted-foreground px-4">
@@ -179,7 +179,7 @@ export default function DashboardPage() {
 
       {/* Footer */}
       <footer className="w-full border-t bg-background py-8 text-center text-sm text-muted-foreground">
-        <p>© 2026 Antigravity Quant Platform. All rights reserved.</p>
+        <p>© 2026 KIRA - Kinetic Intelligence for Research & Alpha. All rights reserved.</p>
       </footer>
     </div>
   );

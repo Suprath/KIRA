@@ -1,4 +1,4 @@
-# 🚀 Production-Grade Quant Trading Platform (Indian Markets)
+# Production-Grade Quant Trading Platform (Indian Markets)
 
 A **high-frequency, event-driven algorithmic trading platform** designed for **NSE/BSE (India)** using the **Upstox V3 API**.
 
@@ -6,7 +6,7 @@ Built with a **microservices architecture**, it handles real-time ingestion, mar
 
 ---
 
-## 🏗 Architecture
+## Architecture
 
 The system follows a **reactive, event-driven design**.
 
@@ -114,9 +114,9 @@ QUESTDB_HOST=questdb_tsdb
 
 ---
 
-## 📅 Daily Routine (Runbook)
+##  Daily Routine (Runbook)
 
-⚠️ **Upstox access tokens expire daily at 3:30 AM IST**  
+ **Upstox access tokens expire daily at 3:30 AM IST**  
 Follow this routine every trading day before market open (~08:45 AM).
 
 ### Step 1: Start Infrastructure
@@ -140,7 +140,7 @@ Downloads ~22,000 instruments into PostgreSQL.
 
 ---
 
-## 📡 Kafka Topics & Data Streams
+##  Kafka Topics & Data Streams
 
 ### Raw Market Data (`market.equity.ticks`)
 Fields: symbol, ltp, volume, open interest, previous close, timestamp
@@ -158,7 +158,7 @@ List of high-momentum equities detected pre-breakout
 
 ---
 
-## 🐍 Quant SDK & Strategy Engine
+##  Quant SDK & Strategy Engine
 
 The platform now features a **QuantConnect-inspired SDK** (`quant_sdk`) for writing and executing algorithms. Strategies are decoupled from the core runtime, allowing for flexible backtesting and live execution.
 
@@ -226,7 +226,7 @@ Visualize results using the **Frontend Dashboard**.
 
 ---
 
-## 🔌 API Documentation
+##  API Documentation
 
 **Base URL:** http://localhost:8080
 
@@ -257,7 +257,7 @@ Runs diagnostics on Kafka, databases, and API connectivity.
 
 ---
 
-## 📊 Database Schema
+##  Database Schema
 
 ### PostgreSQL (`quant_platform`)
 - instruments — master symbol dictionary
@@ -271,7 +271,7 @@ Runs diagnostics on Kafka, databases, and API connectivity.
 
 ---
 
-## 🛑 Troubleshooting
+##  Troubleshooting
 
 ### Kafka Connection Refused
 Kafka takes ~30s to boot on macOS.  

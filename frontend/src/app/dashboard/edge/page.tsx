@@ -151,7 +151,7 @@ export default function EdgeDashboard() {
                     <Link href="/"><Button variant="ghost" size="icon" className="hover:bg-primary/10"><ArrowLeft className="h-4 w-4" /></Button></Link>
                     <div className="flex items-center gap-2 border-l border-border pl-4">
                         <Brain className="h-5 w-5 text-purple-500 fill-current shrink-0" />
-                        <h1 className="text-xl md:text-2xl font-bold tracking-tight bg-gradient-to-r from-purple-600 to-blue-500 bg-clip-text text-transparent truncate">Deep Edge Scanner</h1>
+                        <h1 className="text-xl md:text-2xl font-bold tracking-tight bg-gradient-to-r from-purple-600 to-blue-500 bg-clip-text text-transparent truncate">KIRA Deep Edge Scanner</h1>
                     </div>
                 </div>
                 <ThemeToggle />
@@ -190,8 +190,8 @@ export default function EdgeDashboard() {
                                             return (
                                                 <div key={i}
                                                     className={`p-2.5 px-3 flex justify-between items-center border-b border-border/50 last:border-0 transition-colors ${alreadyAdded
-                                                            ? 'opacity-50 cursor-not-allowed bg-muted/20'
-                                                            : 'hover:bg-purple-500/10 cursor-pointer'
+                                                        ? 'opacity-50 cursor-not-allowed bg-muted/20'
+                                                        : 'hover:bg-purple-500/10 cursor-pointer'
                                                         }`}
                                                     onClick={() => {
                                                         if (alreadyAdded) return;

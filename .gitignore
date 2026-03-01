@@ -23,7 +23,8 @@ docker-compose.override.yml
 *.log
 **/logs/
 
-# Backtest Artifacts (generated at runtime)
+# Backtest Artifacts (generated at runtime — user strategies)
+**/strategies/backtest_*/
 **/strategies/backtest_*.py
 **/strategies/__pycache__/
 

@@ -38,6 +38,7 @@ class BacktestRequest(BaseModel):
 class LiveStartRequest(BaseModel):
     strategy_name: str
     capital: float
+    trading_mode: str = "MIS"  # MIS (intraday) or CNC (delivery)
 
 def run_live_strategy():
     """Runs the strategy in LIVE mode."""
@@ -167,20 +168,33 @@ def start_live(request: LiveStartRequest):
     
     if ACTIVE_ENGINE and ACTIVE_ENGINE.IsRunning:
         return {"status": "error", "message": "Live strategy already running. Stop it first."}
-        
-    engine = AlgorithmEngine(backtest_mode=False)
+
+    mode = request.trading_mode.upper()
+    if mode not in ("MIS", "CNC"):
+        mode = "MIS"
+    engine = AlgorithmEngine(backtest_mode=False, trading_mode=mode)
     ACTIVE_STRATEGY_NAME = request.strategy_name
     
     threading.Thread(target=run_live_thread, args=(engine, request.strategy_name, request.capital), daemon=True).start()
     
-    return {"status": "started", "message": f"Started {request.strategy_name} with ₹{request.capital}"}
+    return {"status": "started", "message": f"Started {request.strategy_name} ({mode}) with ₹{request.capital}"}
 
 @app.post("/live/stop")
 def stop_live():
     global ACTIVE_ENGINE
     if ACTIVE_ENGINE:
+        run_id = getattr(ACTIVE_ENGINE, 'RunID', None)
         ACTIVE_ENGINE.Stop()
-        return {"status": "stopped", "message": "Stopping signal sent."}
+
+        # Compute and save stats for the live session (same pipeline as backtest)
+        if run_id:
+            try:
+                _compute_and_save_stats(run_id)
+                logger.info(f"✅ Live session stats saved for {run_id}")
+            except Exception as e:
+                logger.error(f"Failed to save live stats: {e}")
+
+        return {"status": "stopped", "message": "Strategy stopped. Stats saved."}
     return {"status": "not_running", "message": "No live strategy running."}
 
 class StrategySaveRequest(BaseModel):

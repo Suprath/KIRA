@@ -35,7 +35,7 @@ jobs:
 
       - name: Run Unit Tests (PyTest) & Generate Coverage
         run: |
-          pytest tests/unit/ --junitxml=pytest.xml --cov-report=xml --cov=services
+          pytest tests/unit/ --junitxml=pytest.xml --cov-report=xml --cov=services --cov-fail-under=20
 
       - name: Security Scan (Bandit)
         run: |

@@ -31,29 +31,43 @@ from psycopg2 import pool
 pg_pool = None
 qdb_pool = None
 
+import time
+
 @app.on_event("startup")
 def startup_db_pools():
     global pg_pool, qdb_pool
-    try:
-        pg_pool = psycopg2.pool.ThreadedConnectionPool(
-            1, 20, # Min 1, Max 20 connections
-            host=os.getenv("POSTGRES_HOST", "postgres_metadata"),
-            port=5432,
-            user="admin",
-            password="password123",
-            database="quant_platform"
-        )
-        qdb_pool = psycopg2.pool.ThreadedConnectionPool(
-            1, 20,
-            host=os.getenv("QUESTDB_HOST", "questdb_tsdb"),
-            port=8812,
-            user="admin",
-            password="quest",
-            database="qdb"
-        )
-        print("✅ Database Connection Pools Initialized")
-    except Exception as e:
-        print(f"❌ Failed to initialize connection pools: {e}")
+    retries = 10
+    
+    for attempt in range(retries):
+        try:
+            if not pg_pool:
+                pg_pool = psycopg2.pool.ThreadedConnectionPool(
+                    1, 20, # Min 1, Max 20 connections
+                    host=os.getenv("POSTGRES_HOST", "postgres_metadata"),
+                    port=5432,
+                    user=os.getenv("POSTGRES_USER", "admin"),
+                    password=os.getenv("POSTGRES_PASSWORD", "password123"),
+                    database=os.getenv("POSTGRES_DB", "quant_platform")
+                )
+            
+            if not qdb_pool:
+                qdb_pool = psycopg2.pool.ThreadedConnectionPool(
+                    1, 20,
+                    host=os.getenv("QUESTDB_HOST", "questdb_tsdb"),
+                    port=8812,
+                    user=os.getenv("QUESTDB_USER", "admin"),
+                    password=os.getenv("QUESTDB_PASSWORD", "quest"),
+                    database="qdb"
+                )
+            
+            print("✅ Database Connection Pools Initialized Successfully")
+            return
+            
+        except Exception as e:
+            print(f"⚠️ [Attempt {attempt+1}/{retries}] Failed to initialize connection pools: {e}")
+            time.sleep(3)
+            
+    print("❌ CRITICAL: Reached maximum retries for DB connection pools.")
 
 @app.on_event("shutdown")
 def shutdown_db_pools():

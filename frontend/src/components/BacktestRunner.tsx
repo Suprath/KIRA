@@ -450,14 +450,50 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                     </div>
                 </div>
 
-                {/* Main Content Body */}
-                <div className="flex flex-col xl:flex-row flex-1 overflow-hidden">
-                    {/* Left Panel: Chart & Data */}
-                    <div className="flex-1 flex flex-col xl:border-r border-b xl:border-b-0 border-slate-800 min-w-0 p-4 gap-4 overflow-y-auto custom-scrollbar">
+                {/* Main Content Body (Scrollable Area) */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-4 bg-[#0a0a0b]">
+                    <div className="flex flex-col max-w-7xl mx-auto gap-6">
+
+                        {/* Top Insights Layer */}
+                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+                            {[
+                                { label: "Net Profit", val: `₹${stats.netProfit.toFixed(1)}`, icon: IndianRupee, color: stats.netProfit >= 0 ? 'text-green-400' : 'text-red-400' },
+                                { label: "Win Rate", val: stats.winRate, icon: Target, color: 'text-blue-400' },
+                                { label: "Max Drawdown", val: stats.maxDrawdown, icon: Percent, color: 'text-red-400' },
+                                { label: "Sharpe Ratio", val: stats.sharpeRatio.toFixed(2), icon: Activity, color: 'text-purple-400' },
+                                { label: "Est. Brokerage", val: `₹${(stats.brokeragePaid || 0).toFixed(2)}`, icon: IndianRupee, color: 'text-yellow-500' },
+                                {
+                                    label: "Processing Speed",
+                                    val: speedFinal
+                                        ? `${avgSpeed >= 1_000_000 ? (avgSpeed / 1_000_000).toFixed(1) + 'M' : avgSpeed >= 1000 ? (avgSpeed / 1000).toFixed(0) + 'K' : avgSpeed} avg / ${maxSpeed >= 1_000_000 ? (maxSpeed / 1_000_000).toFixed(1) + 'M' : maxSpeed >= 1000 ? (maxSpeed / 1000).toFixed(0) + 'K' : maxSpeed} max`
+                                        : liveSpeed > 0
+                                            ? `${liveSpeed >= 1_000_000 ? (liveSpeed / 1_000_000).toFixed(1) + 'M' : liveSpeed >= 1000 ? (liveSpeed / 1000).toFixed(0) + 'K' : liveSpeed} ticks/s`
+                                            : '---',
+                                    icon: Gauge,
+                                    color: 'text-emerald-400'
+                                },
+                            ].map((s, i) => {
+                                const showVal = isComplete || i === 5;
+                                const textLength = showVal && typeof s.val === 'string' ? s.val.length : 0;
+                                const textSizeClass = textLength > 15 ? 'text-base lg:text-sm xl:text-base' : 'text-xl';
+
+                                return (
+                                    <div key={i} className="bg-[#111113] border border-slate-800 rounded-xl p-4 flex flex-col justify-between min-w-0 shadow-sm">
+                                        <div className="flex flex-row items-center justify-between mb-3">
+                                            <span className="text-xs font-semibold text-slate-500 uppercase truncate mr-2">{s.label}</span>
+                                            <s.icon className={`h-4 w-4 opacity-50 shrink-0 ${s.color}`} />
+                                        </div>
+                                        <span className={`${textSizeClass} font-bold tracking-tight font-mono ${s.color} truncate`} title={showVal ? String(s.val) : ""}>
+                                            {showVal ? s.val : "---"}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
 
                         {/* Equity Curve Chart */}
-                        <div className="h-[45%] min-h-[300px] border border-slate-800 bg-[#111113] rounded-xl p-4 flex flex-col relative overflow-hidden shrink-0">
-                            <div className="flex items-center justify-between mb-4 z-10">
+                        <div className="h-[400px] border border-slate-800 bg-[#111113] rounded-xl p-4 flex flex-col relative overflow-hidden shadow-sm">
+                            <div className="flex items-center justify-between mb-4 z-10 shrink-0">
                                 <h3 className="text-sm font-semibold text-white tracking-wide uppercase flex items-center gap-2">
                                     <BarChart3 className="h-4 w-4 text-blue-500" />
                                     Equity Curve Analysis
@@ -517,36 +553,7 @@ export function BacktestRunner({ strategyName, strategyCode, projectFiles }: { s
                         </div>
                     </div>
 
-                    {/* Top Insights Layer */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 shrink-0">
-                        {[
-                            { label: "Net Profit", val: `₹${stats.netProfit.toFixed(1)}`, icon: IndianRupee, color: stats.netProfit >= 0 ? 'text-green-400' : 'text-red-400' },
-                            { label: "Win Rate", val: stats.winRate, icon: Target, color: 'text-blue-400' },
-                            { label: "Max Drawdown", val: stats.maxDrawdown, icon: Percent, color: 'text-red-400' },
-                            { label: "Sharpe Ratio", val: stats.sharpeRatio.toFixed(2), icon: Activity, color: 'text-purple-400' },
-                            { label: "Est. Brokerage", val: `₹${(stats.brokeragePaid || 0).toFixed(2)}`, icon: IndianRupee, color: 'text-yellow-500' },
-                            {
-                                label: "Processing Speed",
-                                val: speedFinal
-                                    ? `${avgSpeed >= 1_000_000 ? (avgSpeed / 1_000_000).toFixed(1) + 'M' : avgSpeed >= 1000 ? (avgSpeed / 1000).toFixed(0) + 'K' : avgSpeed} avg / ${maxSpeed >= 1_000_000 ? (maxSpeed / 1_000_000).toFixed(1) + 'M' : maxSpeed >= 1000 ? (maxSpeed / 1000).toFixed(0) + 'K' : maxSpeed} max`
-                                    : liveSpeed > 0
-                                        ? `${liveSpeed >= 1_000_000 ? (liveSpeed / 1_000_000).toFixed(1) + 'M' : liveSpeed >= 1000 ? (liveSpeed / 1000).toFixed(0) + 'K' : liveSpeed} ticks/s`
-                                        : '---',
-                                icon: Gauge,
-                                color: 'text-emerald-400'
-                            },
-                        ].map((s, i) => (
-                            <div key={i} className="bg-[#111113] border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-                                <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-1 sm:gap-0 mb-2">
-                                    <span className="text-xs font-semibold text-slate-500 uppercase truncate mr-2">{s.label}</span>
-                                    <s.icon className={`h-4 w-4 opacity-50 shrink-0 ${s.color}`} />
-                                </div>
-                                <span className={`text-xl font-bold tracking-tight font-mono ${s.color}`}>
-                                    {(isComplete || i === 5) ? s.val : "---"}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
+
 
                     {/* Trades Table */}
                     <div className="flex-1 min-h-[250px] border border-slate-800 bg-[#111113] rounded-xl p-4 overflow-hidden flex flex-col shrink-0 mb-4">

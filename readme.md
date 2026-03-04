@@ -234,6 +234,29 @@ For a smoother daily experience, you can automate the token fetch using a simple
 
 ---
 
+## Recent Platform Upgrades
+
+The platform has recently undergone a major performance and developer-experience overhaul:
+
+### 1. Hybrid C++ / Python Backtesting Engine
+The core execution engine has been transitioned to a hybrid architecture using **PyBind11**. The computationally heavy tick-processing loop, real-time indicators (SMA, EMA with O(1) circular buffers), and transaction cost math are now written in highly optimized C++. This bypasses Python's Global Interpreter Lock (GIL) and runtime overhead, achieving ultra-low latency while allowing users to still write simple Python strategies.
+
+### 2. Full Python Traceback Error Modals
+Errors originating inside user strategy code (like missing imports, syntax errors, or runtime exceptions during `OnData`) are now captured in full by the backend log scanner. A sleek, terminal-like Error Modal now pops up in the UI showing exactly which file, line number, and operation failed, identically to a local console output. This eliminates blind debugging.
+
+### 3. Native QuantConnect Scheduling API
+The `QCAlgorithm` SDK now natively supports scheduled events for precise daily control, seamlessly integrating into the turbo event loop:
+```python
+# Liquidate all positions at exactly 3:15 PM every day
+self.Schedule.On(
+    self.DateRules.EveryDay(), 
+    self.TimeRules.At(15, 15), 
+    self.LiquidateAllPositions
+)
+```
+
+---
+
 ## A Note on Sharpe Ratio Stability
 
 The Sharpe Ratio reported in your backtest results can be **highly unreliable for short testing periods**.

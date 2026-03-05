@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kira": {
+      "url": "http://localhost:8005/sse",
+      "type": "sse"
+    }
+  }
+}

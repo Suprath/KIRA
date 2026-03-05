@@ -45,8 +45,8 @@ class EdgeScanner:
                 FROM ohlc 
                 WHERE symbol IN ('{symbols_str}')
                   AND timeframe = '{timeframe}'
-                  AND timestamp >= to_timestamp('{ts_start}', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ')
-                  AND timestamp <= to_timestamp('{ts_end}', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ')
+                  AND timestamp >= '{ts_start}'::timestamp
+                  AND timestamp <= '{ts_end}'::timestamp
                 ORDER BY timestamp ASC;
             """
 

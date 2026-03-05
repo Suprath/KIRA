@@ -709,20 +709,21 @@ class AlgorithmEngine:
 
             # Fetch ALL trades (BUY + SELL) ordered chronologically
             cur.execute(
-                f"SELECT timestamp, pnl FROM {table} WHERE run_id=%s ORDER BY timestamp ASC",
+                f"SELECT timestamp, pnl, price, quantity, transaction_type FROM {table} WHERE run_id=%s ORDER BY timestamp ASC",
                 (self.RunID,),
             )
             rows = cur.fetchall()
 
             # Build equity curve from cumulative PnL
             current_equity = initial_cap
+            total_brokerage = 0.0
             if rows:
                 # Inject baseline point just before the first trade
                 equity_curve.append({
                     'timestamp': rows[0][0] - timedelta(seconds=1),
                     'equity': initial_cap
                 })
-                for ts, pnl_val in rows:
+                for ts, pnl_val, price, quantity, txn_type in rows:
                     trade_pnl = float(pnl_val) if pnl_val is not None else 0.0
                     current_equity += trade_pnl
                     equity_curve.append({'timestamp': ts, 'equity': current_equity})
@@ -730,6 +731,14 @@ class AlgorithmEngine:
                     # Collect non-zero PnLs for trade-level metrics
                     if pnl_val is not None and trade_pnl != 0.0:
                         pnl_list.append(trade_pnl)
+                        
+                    # Replicate Frontend's dynamic estimated brokerage math
+                    if price and quantity:
+                        turnover = float(price) * abs(int(quantity))
+                        flat = min(20.0, turnover * 0.0003)
+                        stt = turnover * 0.00025 if txn_type == 'SELL' else 0.0
+                        gst = flat * 0.18
+                        total_brokerage += (flat + stt + gst)
             else:
                 equity_curve.append({'timestamp': datetime.now(), 'equity': initial_cap})
 
@@ -749,6 +758,7 @@ class AlgorithmEngine:
             pnl_list=pnl_list,
             initial_capital=initial_cap,
         )
+        stats['brokerage_paid'] = round(total_brokerage, 2)
         return stats
 
     def SaveStatistics(self):

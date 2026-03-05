@@ -230,6 +230,19 @@ services:
       - api_gateway
     restart: always
 
+  mcp_server:
+    build: ../services/mcp_server
+    container_name: mcp_server
+    depends_on:
+      - api_gateway
+    ports:
+      - "8005:8080"
+    volumes:
+      - ../services/mcp_server:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: always
+
 volumes:
   questdb_data:
   postgres_data:

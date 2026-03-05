@@ -567,7 +567,7 @@ def get_backtest_stats(run_id: str, conn = Depends(get_pg_conn)):
 
         # ── Fallback: compute stats from trade data directly ──
         cur.execute("""
-            SELECT pnl FROM backtest_orders
+            SELECT pnl, price, quantity, transaction_type FROM backtest_orders
             WHERE run_id = %s AND pnl IS NOT NULL
             ORDER BY timestamp ASC;
         """, (run_id,))
@@ -588,7 +588,15 @@ def get_backtest_stats(run_id: str, conn = Depends(get_pg_conn)):
             }
 
         pnl_list = [float(r[0]) for r in pnl_rows if r[0] is not None and float(r[0]) != 0.0]
-        all_pnls = [float(r[0]) for r in pnl_rows if r[0] is not None]
+        
+        total_brokerage = 0.0
+        for r in pnl_rows:
+            if r[1] and r[2] and r[3]: # price, qty, txn_type
+                turnover = float(r[1]) * abs(int(r[2]))
+                flat = min(20.0, turnover * 0.0003)
+                stt = turnover * 0.00025 if r[3] == 'SELL' else 0.0
+                gst = flat * 0.18
+                total_brokerage += (flat + stt + gst)
 
         if not pnl_list:
             return {}
@@ -622,6 +630,7 @@ def get_backtest_stats(run_id: str, conn = Depends(get_pg_conn)):
             "expectancy": expectancy,
             "avg_win": avg_win,
             "avg_loss": avg_loss,
+            "brokerage_paid": round(total_brokerage, 2),
         }
     except Exception as e:
         return {}
